@@ -35,37 +35,53 @@ function useUsage(range: RangeId) {
   const [data, setData] = useState<UsageData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    const span = windowFor(range, new Date());
-    rpc.call("usage_window", { since: span.since }).then(
-      (result) => {
-        setData({
-          since: span.since,
-          bars: fillBars(span.bars, result.hours),
-          unit: span.unit,
-          threads: result.threads,
-          recordingSince: result.recordingSince,
-          contextThresholds: result.contextThresholds,
-          turnTime: result.turnTime,
-        });
-        setError(null);
-      },
-      (cause) => setError(messageOf(cause)),
-    );
-  }, [rpc, range]);
-
+  const refresh = useRef<(() => void) | null>(null);
+  const load = useCallback(() => refresh.current?.(), []);
   useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let dirty = false;
+    const read = async () => {
+      if (!active) return;
+      dirty = true;
+      if (inFlight) return;
+      inFlight = true;
+      while (active && dirty) {
+        dirty = false;
+        const span = windowFor(range, new Date());
+        try {
+          const result = await rpc.call("usage_window", { since: span.since });
+          if (!active) break;
+          setData({
+            since: span.since,
+            bars: fillBars(span.bars, result.hours),
+            unit: span.unit,
+            threads: result.threads,
+            recordingSince: result.recordingSince,
+            contextThresholds: result.contextThresholds,
+            turnTime: result.turnTime,
+          });
+          setError(null);
+        } catch (cause) {
+          if (active) setError(messageOf(cause));
+        }
+      }
+      inFlight = false;
+    };
+    refresh.current = read;
     setData(null);
     load();
-  }, [load]);
+    const timer = setInterval(load, 60_000);
+    return () => {
+      active = false;
+      dirty = false;
+      refresh.current = null;
+      clearInterval(timer);
+    };
+  }, [rpc, range, load]);
   // The newest bar keeps filling while a thread runs, and the window slides
   // forward every hour, so re-read on new usage and once a minute.
   useRealtime(USAGE_CHANNEL, load);
-  useEffect(() => {
-    const timer = setInterval(load, 60_000);
-    return () => clearInterval(timer);
-  }, [load]);
-
   return { data, error };
 }
 
@@ -73,10 +89,35 @@ function useUsage(range: RangeId) {
 function useLimits(): Limit[] {
   const rpc = useRpc<typeof rpcContract>();
   const [limits, setLimits] = useState<Limit[]>([]);
-  const load = useCallback(() => {
-    rpc.call("usage_limits", null).then((result) => setLimits(result.limits), () => undefined);
-  }, [rpc]);
-  useEffect(load, [load]);
+  const refresh = useRef<(() => void) | null>(null);
+  const load = useCallback(() => refresh.current?.(), []);
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let dirty = false;
+    const read = async () => {
+      if (!active) return;
+      dirty = true;
+      if (inFlight) return;
+      inFlight = true;
+      while (active && dirty) {
+        dirty = false;
+        try {
+          const result = await rpc.call("usage_limits", null);
+          if (active) setLimits(result.limits);
+        } catch {
+        }
+      }
+      inFlight = false;
+    };
+    refresh.current = read;
+    load();
+    return () => {
+      active = false;
+      dirty = false;
+      refresh.current = null;
+    };
+  }, [rpc, load]);
   useRealtime(LIMITS_CHANNEL, load);
   // The past hour's tokens and the session's spark change with each turn.
   useRealtime(USAGE_CHANNEL, load);
