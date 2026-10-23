@@ -73,10 +73,36 @@ function useUsage(range: RangeId) {
 function useLimits(): Limit[] {
   const rpc = useRpc<typeof rpcContract>();
   const [limits, setLimits] = useState<Limit[]>([]);
-  const load = useCallback(() => {
-    rpc.call("usage_limits", null).then((result) => setLimits(result.limits), () => undefined);
-  }, [rpc]);
-  useEffect(load, [load]);
+  const refresh = useRef<(() => void) | null>(null);
+  const load = useCallback(() => refresh.current?.(), []);
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let dirty = false;
+    const read = async () => {
+      if (!active) return;
+      dirty = true;
+      if (inFlight) return;
+      inFlight = true;
+      while (active && dirty) {
+        dirty = false;
+        try {
+          const result = await rpc.call("usage_limits", null);
+          if (active) setLimits(result.limits);
+        } catch {
+          // Keep the last reading until a later refresh succeeds.
+        }
+      }
+      inFlight = false;
+    };
+    refresh.current = read;
+    load();
+    return () => {
+      active = false;
+      dirty = false;
+      refresh.current = null;
+    };
+  }, [rpc, load]);
   useRealtime(LIMITS_CHANNEL, load);
   // The past hour's tokens and the session's spark change with each turn.
   useRealtime(USAGE_CHANNEL, load);

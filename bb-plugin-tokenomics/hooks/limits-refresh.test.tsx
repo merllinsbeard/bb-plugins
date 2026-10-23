@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { useEffect, type ComponentType, type ReactNode } from "react";
+import { StrictMode, useEffect, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => ({
@@ -56,10 +56,10 @@ const pending: Array<{
   reject: (error: Error) => void;
 }> = [];
 
-function mount() {
+function mount(strict = false) {
   if (harness.overlay === null) throw new Error("The native topbar slot was not registered");
   const Overlay = harness.overlay;
-  return render(<Overlay />);
+  return render(strict ? <StrictMode><Overlay /></StrictMode> : <Overlay />);
 }
 
 function emit(channel: string, count = 1) {
@@ -103,15 +103,64 @@ describe("topbar usage limits refresh with a pending transport", () => {
     emit(USAGE_CHANNEL);
     await act(async () => { pending[1]!.reject(new Error("transport unavailable")); });
     expect(screen.getByTestId("limit-reading").textContent).toBe("10");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(2);
     emit(LIMITS_CHANNEL);
     await resolve(2, 30);
     expect(screen.getByTestId("limit-reading").textContent).toBe("30");
+  });
+
+  it("reads again for events during the trailing refresh and stops when drained", async () => {
+    const view = mount();
+    emit(USAGE_CHANNEL);
+    await resolve(0, 10);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(2);
+    emit(LIMITS_CHANNEL, 100);
+    emit(USAGE_CHANNEL, 100);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(2);
+    await resolve(1, 20);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+    await resolve(2, 30);
+    const Overlay = harness.overlay!;
+    view.rerender(<Overlay />);
+    expect(screen.getByTestId("limit-reading").textContent).toBe("30");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+  });
+
+  it("drains a pending event after rejection while retaining the last reading", async () => {
+    mount();
+    await resolve(0, 10);
+    emit(USAGE_CHANNEL);
+    emit(LIMITS_CHANNEL);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(2);
+    await act(async () => { pending[1]!.reject(new Error("transport unavailable")); });
+    expect(screen.getByTestId("limit-reading").textContent).toBe("10");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+    await resolve(2, 30);
+    expect(screen.getByTestId("limit-reading").textContent).toBe("30");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["resolve", "reject"])("keeps StrictMode's old %s inert while the current lifetime is dirty", async (settlement) => {
+    mount(true);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(2);
+    emit(USAGE_CHANNEL, 100);
+    await resolve(1, 30);
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+    if (settlement === "resolve") await resolve(0, 10);
+    else await act(async () => { pending[0]!.reject(new Error("transport unavailable")); });
+    expect(screen.getByTestId("limit-reading").textContent).toBe("30");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
+    await resolve(2, 40);
+    expect(screen.getByTestId("limit-reading").textContent).toBe("40");
+    expect(harness.rpc.call).toHaveBeenCalledTimes(3);
   });
 
   it("drops an unmounted view's queued refresh and starts fresh when remounted", async () => {
     const view = mount();
     emit(USAGE_CHANNEL, 100);
     view.unmount();
+    emit(LIMITS_CHANNEL);
+    emit(USAGE_CHANNEL);
     await resolve(0, 10);
     expect(harness.rpc.call).toHaveBeenCalledTimes(1);
     mount();
