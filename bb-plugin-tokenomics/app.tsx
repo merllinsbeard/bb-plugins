@@ -106,7 +106,6 @@ function useLimits(): Limit[] {
           const result = await rpc.call("usage_limits", null);
           if (active) setLimits(result.limits);
         } catch {
-          // Keep the last reading until a later refresh succeeds.
         }
       }
       inFlight = false;
