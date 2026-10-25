@@ -13,6 +13,7 @@ what not to do with it.
 | --- | --- | --- |
 | [Sync status](#sync-status) | `@danielbachhuber/bb-plugin-component-library/sync-status` | How long ago a page last synced, and a Refresh button, for the page's title bar, with what the past hour of syncs cost on GitHub behind the label |
 | [Sidebar count](#sidebar-count) | `@danielbachhuber/bb-plugin-component-library/sidebar-count` | The counts beside a page's name in bb's sidebar: urgent rows in a red circle, optionally rows due soon in amber beside it as one pill, then the total; or rows past a warning in amber and past an error in red |
+| [Nav badge](#nav-badge) | `@danielbachhuber/bb-plugin-component-library/nav-badge` | The badge on a page's icon in bb's navigation: urgent rows as a red count, or else rows due soon as an amber one, in the same red as Sidebar count |
 | [Segmented](#segmented) | `@danielbachhuber/bb-plugin-component-library/segmented` | A row of choices, one always on, and a toggle form for a filter that can be off |
 | [Calendar](#calendar) | `@danielbachhuber/bb-plugin-component-library/calendar` | A month grid, drawn the way bb draws one, for picking a day or a range |
 | [Date range](#date-range) | `@danielbachhuber/bb-plugin-component-library/date-range` | A button that opens two months of calendar to pick a span of days |
@@ -176,7 +177,41 @@ total keeps that box. A row with a circle and a row without one then have
 their totals in the same column. A page with nothing urgent still draws its
 total through this component, with `urgent={0}`, for that reason.
 
-Now, PR Sweep, Issue Sweep, and Review Sweep use it.
+bb 0.47 and later ignore `experimental_sidebarAccessory`, so in the sidebar
+use a [Nav badge](#nav-badge). Tokenomics draws `SidebarLevels`.
+
+## Nav badge
+
+```tsx
+import { navBadgeRedContentScript, needsYouBadge } from "@danielbachhuber/bb-plugin-component-library/nav-badge";
+
+app.contentScripts.register(navBadgeRedContentScript);
+app.slots.navPanel({
+  // ...
+  experimental_useBadge: () => needsYouBadge({ urgent, urgentLabel: `${urgent} urgent`, soon, soonLabel: `${soon} due today` }),
+});
+```
+
+It answers "does this page need me?" from bb's navigation, on the icon in
+the rail and beside the name in the sidebar list. bb draws the badge;
+`experimental_useBadge` is a hook that returns what to draw, so it can read
+the same listing as the page. That field needs `@get-bb/plugin-sdk` 0.6.53
+or later, and a host that old, in `engines.bbPluginSdk`.
+
+**What it draws.** `needsYouBadge` gives the urgent count in red, or, when
+nothing is urgent, the due-soon count in amber, or nothing. The total is
+left out, so a badge always means something to do. bb shows a count over 9
+as "9+" on the rail and over 99 as "99+" in the list. The label, which bb puts in the
+tooltip and the accessible name, names both counts when both are above zero.
+
+**The red.** bb draws a critical badge in its own darker red.
+`navBadgeRedContentScript` adds a style rule to the document's head that
+draws it in Tailwind's red-600 instead, the red Sidebar count and the pages
+use. bb marks the badge with `data-nav-badge-tone` but not with the page it
+belongs to, so every red badge in bb's navigation changes, bb's own
+included.
+
+Now, PR Sweep, and Review Sweep use it.
 
 **Don't** draw a bare number in a `<span>`, which drifts out of line with
 the rows around it, or count rows the page would not show.
@@ -353,8 +388,29 @@ stylesheet to elements under `data-bb-plugin="<id>"`, and the slot sits in
 bb's own header, outside the plugin's root. Without it the pill's colors are
 missing.
 
-Now, Issue Sweep, Review Sweep, and PR Sweep use it, with `order` 0 to 3 in
-that order.
+**Aligning to the sidebar's edge.** With `alignEnd`, the slot moves to the
+right edge of the sidebar column (`[data-sidebar="gap"]`), 8px in, while the
+sidebar is open, and stays beside the toggle when the sidebar is closed and
+only the rail is left. A ResizeObserver on the column and the slot keeps it
+there as the sidebar is dragged wider, and the slot aligns again each time
+it moves. Only the desktop title bar does this; in a browser the slot stays
+where it goes.
+
+Inside the slot, `useTopBarRoom()` gives the pixels from where the slot
+starts beside the toggle to that edge, so a button can draw a narrower form
+when the sidebar is too narrow for its full one. The number does not change
+with the slot's own width, so drawing less does not flip it back. It is
+negative with the sidebar closed, and null outside the desktop title bar.
+Tokenomics drops its spark chart and keeps the rings below 120px.
+
+bb's title bar takes no pointer events except around its own buttons, so
+the slot turns them back on for itself.
+
+Tokenomics uses the slot with `alignEnd`, with its own button through
+`TopBarButton`.
+No plugin uses `TopBarCount`. A page's counts go in a [Nav badge](#nav-badge)
+instead, since several chips in the title bar run past the sidebar's edge and
+over the page title.
 
 **Don't** put more than one button in the slot, or anything wider than the
 counts. The top bar holds a thread's own controls, and every plugin that

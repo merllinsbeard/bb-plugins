@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -110,6 +110,31 @@ describe("server", () => {
     await service.done;
 
     expect(harness.inspection.sdk.callsTo("threads.spawn")).toHaveLength(0);
+  });
+
+  it("stops mid-sweep when the service is stopped, and keeps the last listing", async () => {
+    // A gh that hangs, as a slow sweep does when a reload lands in it. Before
+    // the service passed its signal down, bb gave up waiting after five
+    // seconds and the plugin stopped answering every RPC.
+    const dir = mkdtempSync(join(tmpdir(), "pr-sweep-hang-"));
+    const gh = join(dir, "gh");
+    const started = join(dir, "started");
+    writeFileSync(gh, `#!/bin/sh\ntouch '${started}'\nexec sleep 30\n`);
+    chmodSync(gh, 0o755);
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "pr-sweep",
+      settings: { ghPath: gh, filterToProjects: "off" },
+    });
+    await plugin(bb);
+
+    const service = harness.behavior.runService("sweep");
+    await vi.waitFor(() => expect(existsSync(started)).toBe(true), { timeout: 5_000 });
+    const stopping = Date.now();
+    service.controller.abort();
+    await service.done;
+
+    expect(Date.now() - stopping).toBeLessThan(2_000);
+    expect(await harness.behavior.callRpc("listRows", null)).toMatchObject({ sweptAt: null, lastError: null });
   });
 
   it("declines to spawn when no bb project matches the repository", async () => {

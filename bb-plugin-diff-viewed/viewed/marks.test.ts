@@ -1,27 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
-  fingerprintFromCounts,
-  fingerprintFromStats,
+  countViewed,
   labelForEntry,
-  pathFromToggleLabel,
-  prune,
-  recordKey,
+  legacyMarksToMove,
+  legacyRecordKey,
+  targetKey,
+  targetQuery,
   threadIdFromPath,
-  withMark,
   type DiffFileEntry,
 } from "./marks";
-import { isMarked, syncedProgress } from "./github";
+
+const entry = (
+  path: string,
+  additions = 2,
+  deletions = 2,
+  extra: Partial<DiffFileEntry> = {},
+): DiffFileEntry => ({
+  path,
+  previousPath: null,
+  changeKind: "modified",
+  additions,
+  deletions,
+  binary: false,
+  revision: `rev-${path}-${additions}-${deletions}`,
+  ...extra,
+});
 
 describe("threadIdFromPath", () => {
   it("resolves both thread routes to the same id", () => {
-    expect(threadIdFromPath("/threads/thr_abc123")).toBe("thr_abc123");
-    expect(threadIdFromPath("/projects/proj_x/threads/thr_abc123")).toBe(
-      "thr_abc123",
-    );
+    expect(threadIdFromPath("/threads/thr_a")).toBe("thr_a");
+    expect(threadIdFromPath("/projects/proj_x/threads/thr_a")).toBe("thr_a");
   });
 
   it("ignores the route remainder, so a panel tab is still the same thread", () => {
-    expect(threadIdFromPath("/threads/thr_abc123/changes")).toBe("thr_abc123");
+    expect(threadIdFromPath("/projects/proj_x/threads/thr_a/diff")).toBe("thr_a");
   });
 
   it("returns null off a thread route", () => {
@@ -30,146 +42,30 @@ describe("threadIdFromPath", () => {
   });
 });
 
-describe("pathFromToggleLabel", () => {
-  it("reads the path out of either collapse label", () => {
-    expect(pathFromToggleLabel("Collapse client/app/_layout.tsx")).toBe(
-      "client/app/_layout.tsx",
+describe("targetKey", () => {
+  it("names a range the way bb's server does", () => {
+    expect(targetKey({ type: "uncommitted" })).toBe("uncommitted");
+    expect(targetKey({ type: "all", mergeBaseBranch: "main" })).toBe("all:main");
+    expect(targetKey({ type: "branch_committed", mergeBaseBranch: "main" })).toBe(
+      "branch_committed:main",
     );
-    expect(pathFromToggleLabel("Expand client/app/_layout.tsx")).toBe(
-      "client/app/_layout.tsx",
-    );
-  });
-
-  it("keeps a rename label intact as one key", () => {
-    expect(pathFromToggleLabel("Collapse old/a.ts -> new/a.ts")).toBe(
-      "old/a.ts -> new/a.ts",
-    );
-  });
-
-  it("rejects a card with nothing to expand", () => {
-    expect(
-      pathFromToggleLabel("client/util/README.md has no changes to expand"),
-    ).toBeNull();
-    expect(pathFromToggleLabel(null)).toBeNull();
+    expect(targetKey({ type: "commit", sha: "ABC123" })).toBe("commit:abc123");
   });
 });
 
-describe("fingerprintFromStats", () => {
-  it("captures both counts", () => {
-    expect(fingerprintFromStats("+105 -120")).toBe("+105 -120");
-  });
-
-  it("fills in the zero count a pure add or delete leaves out", () => {
-    expect(fingerprintFromStats("+19")).toBe("+19 -0");
-    expect(fingerprintFromStats("-19")).toBe("+0 -19");
-  });
-
-  it("reads counts bb groups with commas", () => {
-    expect(fingerprintFromStats("+1,234 -5")).toBe("+1234 -5");
-    expect(fingerprintFromStats("+1,234 -5")).not.toBe(
-      fingerprintFromStats("+1,999 -5"),
-    );
-  });
-
-  it("matches the fingerprint bb's file list produces", () => {
-    expect(fingerprintFromStats("+1,234 -0")).toBe(
-      fingerprintFromCounts({ additions: 1234, deletions: 0 }),
-    );
-  });
-
-  it("distinguishes a changed diff from the one that was reviewed", () => {
-    expect(fingerprintFromStats("+8 -4")).not.toBe(fingerprintFromStats("+9 -4"));
-  });
-
-  it("degrades to a stable value when the header shows no counts", () => {
-    expect(fingerprintFromStats("")).toBe("none");
-  });
-});
-
-describe("withMark", () => {
-  const target = { path: "src/a.ts", fingerprint: "+8 -4" };
-
-  it("records the fingerprint that was reviewed, not a bare flag", () => {
-    expect(withMark({}, target, true)).toEqual({ "src/a.ts": "+8 -4" });
-  });
-
-  it("returns the same object when the mark is already what was asked for", () => {
-    const record = { "src/a.ts": "+8 -4" };
-    expect(withMark(record, target, true)).toBe(record);
-    expect(withMark({}, target, false)).toEqual({});
-  });
-
-  it("overwrites a stale fingerprint rather than keeping both", () => {
-    expect(withMark({ "src/a.ts": "+1 -1" }, target, true)).toEqual({
-      "src/a.ts": "+8 -4",
+describe("targetQuery", () => {
+  it("turns the panel's range into the query bb's diff reads take", () => {
+    expect(targetQuery({ type: "all", mergeBaseBranch: "main" })).toEqual({
+      target: "all",
+      mergeBaseBranch: "main",
     });
-  });
-
-  it("clears a mark regardless of which fingerprint was stored", () => {
-    expect(withMark({ "src/a.ts": "+1 -1" }, target, false)).toEqual({});
-  });
-
-  it("leaves other files alone", () => {
-    expect(withMark({ "src/b.ts": "+2" }, target, true)).toEqual({
-      "src/b.ts": "+2",
-      "src/a.ts": "+8 -4",
+    expect(targetQuery({ type: "uncommitted" })).toEqual({ target: "uncommitted" });
+    expect(targetQuery({ type: "commit", sha: "abc123" })).toEqual({
+      target: "commit",
+      sha: "abc123",
     });
   });
 });
-
-describe("isMarked without a pull request", () => {
-  const record = { "src/a.ts": "+8 -4" };
-
-  it("is true only for the exact diff that was marked", () => {
-    expect(isMarked(record, null, { path: "src/a.ts", fingerprint: "+8 -4" })).toBe(
-      true,
-    );
-  });
-
-  it("clears itself when the file changes again", () => {
-    expect(isMarked(record, null, { path: "src/a.ts", fingerprint: "+9 -4" })).toBe(
-      false,
-    );
-  });
-
-  it("is false for a file that was never marked", () => {
-    expect(isMarked(record, null, { path: "src/b.ts", fingerprint: "+8 -4" })).toBe(
-      false,
-    );
-  });
-});
-
-describe("prune", () => {
-  it("drops marks for files no longer in the diff", () => {
-    expect(prune({ "a.ts": "+1", "b.ts": "+2" }, ["a.ts"])).toEqual({
-      "a.ts": "+1",
-    });
-  });
-
-  it("returns the same object when every mark is still present", () => {
-    const record = { "a.ts": "+1" };
-    expect(prune(record, ["a.ts", "b.ts"])).toBe(record);
-  });
-});
-
-describe("recordKey", () => {
-  it("namespaces marks per thread", () => {
-    expect(recordKey("thr_a")).not.toBe(recordKey("thr_b"));
-    expect(recordKey("thr_a")).toBe("viewed:thr_a");
-  });
-});
-
-function entry(path: string, overrides: Partial<DiffFileEntry> = {}): DiffFileEntry {
-  return {
-    path,
-    previousPath: null,
-    changeKind: "modified",
-    additions: 8,
-    deletions: 4,
-    binary: false,
-    ...overrides,
-  };
-}
 
 describe("labelForEntry", () => {
   it("is the path for an ordinary file", () => {
@@ -178,30 +74,49 @@ describe("labelForEntry", () => {
 
   it("names both paths for a rename, the way the card does", () => {
     expect(
-      labelForEntry(
-        entry("src/b.ts", { changeKind: "renamed", previousPath: "src/a.ts" }),
-      ),
-    ).toBe("src/a.ts -> src/b.ts");
+      labelForEntry(entry("src/new.ts", 1, 1, { changeKind: "renamed", previousPath: "src/old.ts" })),
+    ).toBe("src/old.ts -> src/new.ts");
   });
 });
 
-describe("syncedProgress without a pull request", () => {
-  it("counts only files whose current diff is marked", () => {
-    const record = {
-      "src/a.ts": "+8 -4",
-      "src/b.ts": "+1 -1",
-      "src/gone.ts": "+8 -4",
-    };
-    expect(
-      syncedProgress(record, null, [entry("src/a.ts"), entry("src/b.ts"), entry("src/c.ts")]),
-    ).toEqual({ viewed: 1, total: 3 });
+describe("countViewed", () => {
+  it("counts only files whose current revision bb has marked", () => {
+    const a = entry("a.ts");
+    const b = entry("b.ts");
+    const c = entry("c.ts");
+    const viewed = { "a.ts": a.revision, "b.ts": "an older revision" };
+    expect(countViewed(viewed, [a, b, c])).toEqual({ viewed: 1, total: 3 });
+  });
+});
+
+describe("legacyMarksToMove", () => {
+  it("moves a mark whose counts still describe the file", () => {
+    const a = entry("a.ts", 8, 4);
+    expect(legacyMarksToMove({ "a.ts": "+8 -4" }, [a], {})).toEqual([a]);
   });
 
-  it("counts a binary image marked from its size stat", () => {
-    expect(
-      syncedProgress({ "logo.png": "none" }, null, [
-        entry("logo.png", { binary: true, additions: 0, deletions: 0 }),
-      ]),
-    ).toEqual({ viewed: 1, total: 1 });
+  it("drops a mark whose file has changed since", () => {
+    expect(legacyMarksToMove({ "a.ts": "+8 -4" }, [entry("a.ts", 9, 4)], {})).toEqual([]);
+  });
+
+  it("skips a file bb already counts as viewed", () => {
+    const a = entry("a.ts", 8, 4);
+    expect(legacyMarksToMove({ "a.ts": "+8 -4" }, [a], { "a.ts": a.revision })).toEqual([]);
+  });
+
+  it("finds a rename under the label the card had", () => {
+    const moved = entry("src/new.ts", 1, 1, { changeKind: "renamed", previousPath: "src/old.ts" });
+    expect(legacyMarksToMove({ "src/old.ts -> src/new.ts": "+1 -1" }, [moved], {})).toEqual([moved]);
+  });
+
+  it("moves a binary file marked from its size", () => {
+    const image = entry("logo.png", 0, 0, { binary: true });
+    expect(legacyMarksToMove({ "logo.png": "none" }, [image], {})).toEqual([image]);
+  });
+});
+
+describe("legacyRecordKey", () => {
+  it("is the key the old marks were stored under", () => {
+    expect(legacyRecordKey("thr_a")).toBe("viewed:thr_a");
   });
 });

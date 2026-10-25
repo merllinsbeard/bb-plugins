@@ -1,43 +1,49 @@
 // The sync loop: what actually decorates bb's DOM and keeps it agreeing with
-// stored state.
+// bb's marks and GitHub's.
 //
 // This lives outside app.tsx so it can be driven under jsdom. Every bug this
 // plugin has shipped was in here, and each one survived a green test run
 // because the only tests were of pure functions and fixtures — the loop that
 // wires them together was never exercised. `startEngine` takes its RPC,
 // scheduler, and location as parameters for exactly that reason.
+//
+// bb draws the Viewed checkboxes and keeps the marks. This loop adds what bb
+// does not: the count of viewed files in the toolbar, an icon on each file
+// saying whether its mark reaches GitHub, and the sync itself, which runs on
+// the server whenever the panel opens, the window regains focus, or a
+// checkbox changes.
 import {
-  cardForControl,
-  createControl,
-  createFilterItem,
-  existingControl,
-  existingFilterItem,
-  EXPAND_ALL_SELECTOR,
-  FILTER_ATTR,
-  findCards,
-  findOpenSelectorMenu,
   findToolbar,
-  paintCard,
-  paintFilterItem,
+  findViewedBoxes,
+  paintSyncIcon,
   renderProgress,
   undecorate,
   type ControlMode,
-  type DiffCard,
+  type ViewedBox,
 } from "./dom";
 import { readDiffFiles, rowOf, type DiffFilesRead } from "./files";
+import { syncMode, type GithubState } from "./github";
 import {
-  githubPath,
-  isMarked,
-  syncMode,
-  syncedProgress,
-  withGithubViewed,
-  type GithubState,
-} from "./github";
-import { labelForEntry, threadIdFromPath, type ViewedRecord } from "./marks";
+  countViewed,
+  labelForEntry,
+  threadIdFromPath,
+  type DiffFileEntry,
+  type DiffTarget,
+  type ViewedMap,
+} from "./marks";
 
-/** `github` is absent from a prune, which leaves it as it was. */
-export type RecordResult = { record: ViewedRecord; github?: GithubState | null };
-export type FilterResult = { onlyUnviewed: boolean };
+export interface SyncInput {
+  threadId: string;
+  target: DiffTarget;
+  files: DiffFileEntry[];
+}
+
+export interface SyncResult {
+  /** bb's marks for the range once the sync has run. */
+  viewed: ViewedMap;
+  /** The thread's pull request, or null when nothing syncs. */
+  github: GithubState | null;
+}
 
 export interface EngineDeps {
   /** Calls one of the plugin's RPC methods. */
@@ -50,6 +56,8 @@ export interface EngineDeps {
   pathname: () => string;
   /** Defer a pass. Returns a cancel function. `requestAnimationFrame` in bb. */
   defer: (run: () => void) => () => void;
+  /** Wait before syncing after a checkbox changes. Returns a cancel function. */
+  delay: (run: () => void) => () => void;
   /** Where failures go. */
   warn: (cause: unknown) => void;
 }
@@ -59,221 +67,53 @@ export interface Engine {
   syncNow: () => void;
   /** Ask for a pass on the next frame. */
   schedule: () => void;
-  /** Refetch marks and GitHub's Viewed state, as when the window regains focus. */
+  /** Sync again, as when the window regains focus. */
   refresh: () => void;
   dispose: () => void;
 }
 
-interface SyncState {
-  threadId: string | null;
-  record: ViewedRecord;
-  /** The thread's pull request files, or null when nothing syncs. */
-  github: GithubState | null;
-  /**
-   * Whether the server has said if anything syncs. Until it has, `github`
-   * is a guess, so no control claims to be Local.
-   */
-  githubKnown: boolean;
-  /**
-   * Files this engine has already collapsed for you, keyed by path and
-   * fingerprint. It is why a viewed file can be reopened and stay open: each
-   * one is collapsed at most once per diff, not on every pass.
-   */
-  autoCollapsed: Set<string>;
-  pruned: boolean;
-  /** Whether files marked viewed are hidden. Shared by every thread. */
-  onlyUnviewed: boolean;
+interface Panel {
+  threadId: string;
+  target: DiffTarget;
+  files: DiffFileEntry[];
+  /** Thread, range, and every file's revision: what a sync answer is about. */
+  key: string;
 }
 
-function collapseKey(path: string, fingerprint: string): string {
-  return `${path} ${fingerprint}`;
+function panelKey(threadId: string, target: DiffTarget, files: readonly DiffFileEntry[]): string {
+  return JSON.stringify([threadId, target, files.map((file) => [file.path, file.revision])]);
 }
 
 export function startEngine(deps: EngineDeps): Engine {
-  const { rpc, signal, doc, pathname, defer, warn } = deps;
-  const state: SyncState = {
-    threadId: null,
-    record: {},
-    github: null,
-    githubKnown: false,
-    autoCollapsed: new Set(),
-    pruned: false,
-    onlyUnviewed: false,
-  };
-  // True while this engine is writing to the DOM, so an observer driving
-  // `schedule` does not treat its own edits as a reason to run again.
+  const { rpc, signal, doc, pathname, defer, delay, warn } = deps;
+
+  /** The panel as the last pass read it. */
+  let panel: Panel | null = null;
+  /** The last sync answer, and which panel it is about. */
+  let answer: (SyncResult & { key: string }) | null = null;
+  /**
+   * The checkboxes that disagreed with `answer` when a sync was last asked
+   * for. A box bb has not repainted yet keeps disagreeing, and this is what
+   * stops that from asking again on every pass.
+   */
+  let askedFor = "";
+  let running = false;
+  let again = false;
+  let cancelPass: (() => void) | null = null;
+  let cancelDelay: (() => void) | null = null;
+  // True while this engine is writing to the DOM, so the observer does not
+  // treat its own edits as a reason to run again.
   let writing = false;
-  let cancel: (() => void) | null = null;
-  let loading: Promise<void> | null = null;
   // Problems already sent to the server log, so a broken read is logged once
   // per window rather than on every pass.
   const reported = new Set<string>();
 
-  const fail = (cause: unknown) => {
-    // A failed write must not leave the checkbox showing a state the server
-    // never accepted, so resync from whatever the server does have.
-    warn(cause);
-    void reload();
-  };
-
   function schedule(): void {
-    if (signal.aborted || cancel !== null) return;
-    cancel = defer(() => {
-      cancel = null;
+    if (signal.aborted || cancelPass !== null) return;
+    cancelPass = defer(() => {
+      cancelPass = null;
       syncNow();
     });
-  }
-
-  async function reload(): Promise<void> {
-    const { threadId } = state;
-    if (threadId === null) return;
-    try {
-      const result = await rpc<RecordResult>("viewed_list", { threadId });
-      if (signal.aborted || state.threadId !== threadId) return;
-      accept(result);
-    } catch (cause) {
-      warn(cause);
-      // Without an answer, show the marks as bb's own rather than waiting
-      // on GitHub forever.
-      if (!signal.aborted && state.threadId === threadId && !state.githubKnown) {
-        state.githubKnown = true;
-        schedule();
-      }
-    }
-  }
-
-  /**
-   * Paint bb's own marks straight from storage while viewed_list waits on
-   * GitHub, which takes up to a few seconds on a thread's first load.
-   */
-  async function loadMarks(threadId: string): Promise<void> {
-    try {
-      const { record } = await rpc<{ record: ViewedRecord }>("viewed_marks", { threadId });
-      if (signal.aborted || state.threadId !== threadId || state.githubKnown) return;
-      state.record = record;
-      schedule();
-    } catch (cause) {
-      warn(cause);
-    }
-  }
-
-  function accept(result: RecordResult): void {
-    state.record = result.record;
-    if (result.github !== undefined) {
-      state.github = result.github;
-      state.githubKnown = true;
-    }
-    schedule();
-  }
-
-  /** Where a card's mark lives, as far as is known yet. */
-  function modeOf(card: DiffCard): ControlMode {
-    return state.githubKnown ? syncMode(state.github, card) : { kind: "pending" };
-  }
-
-  /**
-   * Handle a click on one file's Viewed checkbox.
-   *
-   * The card is resolved from the clicked control, never from the pass that
-   * injected it — see `cardForControl` for why nothing captured at injection
-   * time can be trusted here.
-   */
-  function setMark(control: Element, viewed: boolean): void {
-    const { threadId } = state;
-    const card = cardForControl(control);
-    if (threadId === null || card === null) return;
-
-    // Paint optimistically: the checkbox has already moved under the user's
-    // cursor and snapping it back while a round trip runs reads as a bug.
-    if (state.github !== null && syncMode(state.github, card).kind === "synced") {
-      state.github = withGithubViewed(state.github, githubPath(card.path), viewed);
-    }
-    state.record = viewed
-      ? { ...state.record, [card.path]: card.fingerprint }
-      : Object.fromEntries(
-          Object.entries(state.record).filter(([path]) => path !== card.path),
-        );
-
-    const key = collapseKey(card.path, card.fingerprint);
-    writing = true;
-    try {
-      paintCard(card, viewed, modeOf(card));
-      if (viewed) {
-        state.autoCollapsed.add(key);
-        if (!card.isCollapsed) card.toggle.click();
-      } else {
-        state.autoCollapsed.delete(key);
-        if (card.isCollapsed) card.toggle.click();
-      }
-    } finally {
-      writing = false;
-    }
-
-    schedule();
-    rpc<RecordResult>("viewed_set", {
-      threadId,
-      path: card.path,
-      fingerprint: card.fingerprint,
-      viewed,
-    }).then((result) => {
-      if (signal.aborted || state.threadId !== threadId) return;
-      accept(result);
-    }, fail);
-  }
-
-  async function loadFilter(): Promise<void> {
-    try {
-      const { onlyUnviewed } = await rpc<FilterResult>("filter_get", null);
-      if (signal.aborted) return;
-      state.onlyUnviewed = onlyUnviewed;
-      schedule();
-    } catch (cause) {
-      warn(cause);
-    }
-  }
-
-  /** Handle a click on the Only unviewed item in the range dropdown. */
-  function setFilter(onlyUnviewed: boolean): void {
-    state.onlyUnviewed = onlyUnviewed;
-    // Close the menu the way bb's own items do once one is picked. Radix
-    // listens for Escape on the document, so a dispatched one is enough.
-    doc.dispatchEvent(
-      new doc.defaultView!.KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-      }),
-    );
-    schedule();
-    rpc<FilterResult>("filter_set", { onlyUnviewed }).then(
-      (result) => {
-        if (signal.aborted) return;
-        state.onlyUnviewed = result.onlyUnviewed;
-        schedule();
-      },
-      (cause: unknown) => {
-        warn(cause);
-        void loadFilter();
-      },
-    );
-  }
-
-  function applyFilter(active: boolean): void {
-    const root = doc.documentElement;
-    if (active && state.onlyUnviewed) {
-      if (!root.hasAttribute(FILTER_ATTR)) root.setAttribute(FILTER_ATTR, "");
-    } else if (root.hasAttribute(FILTER_ATTR)) {
-      root.removeAttribute(FILTER_ATTR);
-    }
-
-    const menu = active ? findOpenSelectorMenu(doc) : null;
-    if (menu === null) return;
-    let item = existingFilterItem(menu);
-    if (item === null) {
-      const nodes = createFilterItem(setFilter);
-      menu.append(...nodes);
-      item = nodes[nodes.length - 1]!;
-    }
-    paintFilterItem(item, state.onlyUnviewed);
   }
 
   function report(message: string): void {
@@ -283,73 +123,72 @@ export function startEngine(deps: EngineDeps): Engine {
     rpc("problem_report", { message }).catch(() => {});
   }
 
-  /**
-   * Show review progress for the whole diff, and prune marks against it.
-   *
-   * Both need every file in the diff, not only the cards bb has drawn, so both
-   * come from the panel's own file list. When that list cannot be read the
-   * toolbar says so and the problem is logged; nothing is pruned, since
-   * pruning against a partial list is what deletes marks that are still good.
-   */
-  function syncProgress(threadId: string, cards: readonly DiffCard[]): void {
-    const first = cards[0];
-    if (first === undefined) {
-      renderProgress(doc, null);
+  /** Sync the panel as it is now. Overlapping requests run one after another. */
+  function requestSync(): void {
+    if (cancelDelay !== null) {
+      cancelDelay();
+      cancelDelay = null;
+    }
+    if (running) {
+      again = true;
       return;
     }
-    const row = rowOf(first.headerRow);
-    const read: DiffFilesRead =
-      row === null
-        ? { status: "unreadable", reason: "the card is not inside a [data-index] row" }
-        : readDiffFiles(row);
-    if (read.status === "unreadable") {
-      renderProgress(doc, { kind: "unavailable", reason: read.reason });
-      report(`Could not read the changes panel's file list: ${read.reason}`);
-      return;
-    }
-    renderProgress(doc, {
-      kind: "progress",
-      ...syncedProgress(state.record, state.github, read.files),
-      ...(state.githubKnown ? {} : { pending: true }),
-    });
-
-    // Prune once per thread, against the full range only: a narrower range
-    // such as Uncommitted leaves out files whose marks are still good.
-    if (state.pruned || read.targetType !== "all" || loading === null) return;
-    state.pruned = true;
-    const presentPaths = read.files.map(labelForEntry);
-    void loading.then(() => {
-      if (signal.aborted || state.threadId !== threadId) return;
-      rpc<RecordResult>("viewed_prune", { threadId, presentPaths }).then(
+    const current = panel;
+    if (current === null || signal.aborted) return;
+    running = true;
+    const input: SyncInput = {
+      threadId: current.threadId,
+      target: current.target,
+      files: current.files,
+    };
+    rpc<SyncResult>("viewed_sync", input)
+      .then(
         (result) => {
-          if (signal.aborted || state.threadId !== threadId) return;
-          accept(result);
+          if (!signal.aborted) answer = { ...result, key: current.key };
         },
-        fail,
-      );
+        (cause: unknown) => {
+          warn(cause);
+          // Without an answer, show bb's marks as bb's own rather than
+          // waiting on GitHub forever.
+          if (!signal.aborted && answer?.key !== current.key) {
+            answer = { viewed: {}, github: null, key: current.key };
+          }
+        },
+      )
+      .finally(() => {
+        running = false;
+        if (signal.aborted) return;
+        if (again) {
+          again = false;
+          requestSync();
+        }
+        schedule();
+      });
+  }
+
+  /** Sync shortly, so a run of clicks goes to the server once. */
+  function requestSyncSoon(): void {
+    if (cancelDelay !== null) cancelDelay();
+    cancelDelay = delay(() => {
+      cancelDelay = null;
+      requestSync();
     });
   }
 
-  function decorate(cards: readonly DiffCard[]): void {
+  function readPanel(boxes: readonly ViewedBox[]): DiffFilesRead | null {
+    const first = boxes[0];
+    if (first === undefined) return null;
+    const row = rowOf(first.box);
+    return row === null
+      ? { status: "unreadable", reason: "the card is not inside a [data-index] row" }
+      : readDiffFiles(row);
+  }
+
+  function clear(): void {
     writing = true;
     try {
-      for (const card of cards) {
-        if (existingControl(card) === null) {
-          // The handler is given its own control, not this card object, so the
-          // click re-reads the live header instead of a stale snapshot.
-          const control: HTMLElement = createControl(card.path, (viewed) =>
-            setMark(control, viewed),
-          );
-          card.actions.append(control);
-        }
-        const viewed = isMarked(state.record, state.github, card);
-        paintCard(card, viewed, modeOf(card));
-        const key = collapseKey(card.path, card.fingerprint);
-        if (viewed && !card.isCollapsed && !state.autoCollapsed.has(key)) {
-          state.autoCollapsed.add(key);
-          card.toggle.click();
-        }
-      }
+      undecorate(doc.body);
+      renderProgress(doc, null);
     } finally {
       writing = false;
     }
@@ -358,38 +197,79 @@ export function startEngine(deps: EngineDeps): Engine {
   function syncNow(): void {
     if (signal.aborted) return;
     const threadId = threadIdFromPath(pathname());
-    if (threadId !== state.threadId) {
-      state.threadId = threadId;
-      state.record = {};
-      state.github = null;
-      state.githubKnown = false;
-      state.autoCollapsed.clear();
-      state.pruned = false;
-      if (threadId !== null) {
-        void loadMarks(threadId);
-        loading = reload();
-      }
-    }
     // The toolbar's presence is the signal that the changes panel is open. The
     // card list below it has no container attribute, so there is nothing else
     // to test, and scanning the whole document on every pass would be wasteful
     // on the many screens that have no diff at all.
-    const toolbar = findToolbar(doc);
-    if (toolbar === null || threadId === null) {
+    if (threadId === null || findToolbar(doc) === null) {
+      panel = null;
+      clear();
+      return;
+    }
+
+    const boxes = findViewedBoxes(doc);
+    const read = readPanel(boxes);
+    if (read === null) {
+      // No card is rendered, so there is nothing to count from.
       writing = true;
-      undecorate(doc.body);
-      applyFilter(false);
       renderProgress(doc, null);
       writing = false;
       return;
     }
+    if (read.status === "unreadable") {
+      writing = true;
+      renderProgress(doc, { kind: "unavailable", reason: read.reason });
+      writing = false;
+      report(`Could not read the changes panel's file list: ${read.reason}`);
+      return;
+    }
 
-    const visible = findCards(doc);
-    decorate(visible);
+    const key = panelKey(threadId, read.target, read.files);
+    const changed = panel?.key !== key;
+    panel = { threadId, target: read.target, files: read.files, key };
+    if (changed) {
+      askedFor = "";
+      requestSync();
+    }
+
+    const current = answer?.key === key ? answer : null;
+    const byLabel = new Map(read.files.map((file) => [labelForEntry(file), file]));
+
+    // What the boxes on screen say is newer than the last answer: a click
+    // shows there before the server has heard about it. So they count over
+    // the answer, and when they disagree with it, the server is told.
+    const viewed: ViewedMap = { ...(current?.viewed ?? {}) };
+    const disagreeing: string[] = [];
+    for (const box of boxes) {
+      const entry = byLabel.get(box.label);
+      if (entry === undefined || box.disabled) continue;
+      const known = current !== null && current.viewed[entry.path] === entry.revision;
+      if (box.checked) viewed[entry.path] = entry.revision;
+      else delete viewed[entry.path];
+      if (current !== null && box.checked !== known) {
+        disagreeing.push(`${entry.path}:${box.checked}`);
+      }
+    }
+    const signature = disagreeing.join("\n");
+    if (signature !== askedFor) {
+      askedFor = signature;
+      if (signature !== "") requestSyncSoon();
+    }
+
     writing = true;
     try {
-      applyFilter(true);
-      syncProgress(threadId, visible);
+      for (const box of boxes) {
+        const entry = byLabel.get(box.label);
+        if (entry === undefined) continue;
+        const mode: ControlMode =
+          current === null ? { kind: "pending" } : syncMode(current.github, entry);
+        paintSyncIcon(box, mode);
+      }
+      renderProgress(doc, {
+        kind: "progress",
+        ...countViewed(viewed, read.files),
+        ...(current === null ? { pending: true } : {}),
+      });
     } finally {
       writing = false;
     }
@@ -397,7 +277,8 @@ export function startEngine(deps: EngineDeps): Engine {
 
   // bb re-renders constantly, so the decoration is re-applied from whatever the
   // DOM currently says rather than assumed to survive. Passes are deferred and
-  // coalesced, and edits this engine makes itself are skipped.
+  // coalesced, and edits this engine makes itself are skipped. `data-state` is
+  // how a Viewed checkbox changes, from a click here or a mark made elsewhere.
   const observer = new doc.defaultView!.MutationObserver(() => {
     if (writing) return;
     schedule();
@@ -406,40 +287,25 @@ export function startEngine(deps: EngineDeps): Engine {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["aria-expanded", "aria-label"],
+    attributeFilter: ["data-state", "aria-label", "disabled"],
   });
 
-  // bb's Expand all files opens viewed files along with the rest. Forget that
-  // they were already collapsed once, so the passes its expansion triggers
-  // fold them again, including cards bb has not rendered yet. Capture phase,
-  // so the label is read before bb's handler flips it.
-  const onClick = (event: Event) => {
-    const target = event.target;
-    if (!(target instanceof doc.defaultView!.Element)) return;
-    if (target.closest(EXPAND_ALL_SELECTOR) === null) return;
-    state.autoCollapsed.clear();
-    schedule();
-  };
-  doc.addEventListener("click", onClick, true);
-
-  void loadFilter();
   schedule();
 
   return {
     syncNow,
     schedule,
     refresh() {
-      void reload();
+      askedFor = "";
+      requestSync();
     },
     dispose() {
       observer.disconnect();
-      doc.removeEventListener("click", onClick, true);
-      if (cancel !== null) cancel();
-      cancel = null;
-      writing = true;
-      undecorate(doc.body);
-      applyFilter(false);
-      writing = false;
+      if (cancelPass !== null) cancelPass();
+      if (cancelDelay !== null) cancelDelay();
+      cancelPass = null;
+      cancelDelay = null;
+      clear();
     },
   };
 }

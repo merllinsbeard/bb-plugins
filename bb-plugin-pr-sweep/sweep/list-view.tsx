@@ -1,11 +1,12 @@
 import type { SyncUsage } from "@danielbachhuber/bb-plugin-component-library/sync-status";
 import type { ReactNode } from "react";
-import { UrlLink } from "@get-bb/plugin-sdk/app";
+import { Markdown, UrlLink } from "@get-bb/plugin-sdk/app";
 import { ThreadLine, OpenThreadAction, StartingThreadLine, type ThreadStatus } from "@danielbachhuber/bb-plugin-component-library/thread-status";
 import { CopyLinkAction, LINE_ACTION } from "sweep-ui/actions";
 import { StatusBanner } from "sweep-ui/banner";
 import { FeedbackDrawer, type FeedbackResult } from "sweep-ui/feedback";
 import { SweepList } from "sweep-ui/list";
+import { SkippedReposFooter } from "sweep-ui/skipped-repos";
 import {
   ChecksBadge,
   DiffCount,
@@ -494,11 +495,9 @@ function SweepingPullRequests() {
  * evidence it is on. Without it an empty panel on a machine holding none of
  * your checkouts is indistinguishable from having no open pull requests.
  *
- * A fragment rather than its own paragraph: it stands in for the empty state's
- * usual second line when there are no rows, and sits on its own line below the
- * list when there are. It is a standing fact about this machine rather than
- * news, so it goes after the work instead of above it, where it would push the
- * list down the page on every load.
+ * It stands in for the empty state's usual second line when there are no rows.
+ * When there are, `SkippedReposFooter` names the repositories at the bottom of
+ * the panel instead.
  */
 function SkippedRepos({ repos }: { repos: string[] }) {
   return (
@@ -618,165 +617,168 @@ export function PrListView({
   }));
 
   return (
-    <div className="h-full overflow-auto p-4 md:p-5">
-      <div className="mx-auto w-full max-w-6xl space-y-5">
-        {listing.lastError ? (
-          <p className="rounded-lg border border-border p-3 text-sm text-destructive">
-            {listing.lastError}
-          </p>
-        ) : null}
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+        <div className="mx-auto w-full max-w-6xl space-y-5">
+          {listing.lastError ? (
+            <p className="rounded-lg border border-border p-3 text-sm text-destructive">
+              {listing.lastError}
+            </p>
+          ) : null}
 
-        {listing.truncated ? (
-          <p className="text-xs text-muted-foreground">
-            The sweep hit the 100 pull request ceiling, so this list may be incomplete.
-          </p>
-        ) : null}
+          {listing.truncated ? (
+            <p className="text-xs text-muted-foreground">
+              The sweep hit the 100 pull request ceiling, so this list may be incomplete.
+            </p>
+          ) : null}
 
-        {listing.failedRepos.length ? (
-          <p className="text-xs text-muted-foreground">
-            Could not refresh {listing.failedRepos.join(", ")}. Showing the last known rows.
-          </p>
-        ) : null}
+          {listing.failedRepos.length ? (
+            <p className="text-xs text-muted-foreground">
+              Could not refresh {listing.failedRepos.join(", ")}. Showing the last known rows.
+            </p>
+          ) : null}
 
-        {listing.rows.length === 0 ? (
-          <EmptyGraphic
-            graphic={<NoPullRequestsGraphic />}
-            // The headline has to move too. "No open pull requests" is untrue
-            // on a machine that simply cannot see the thirty you have open.
-            headline={
-              listing.skippedRepos.length
-                ? "Nothing from the repositories checked out here."
-                : "No open pull requests."
-            }
-          >
-            {listing.skippedRepos.length ? (
-              <SkippedRepos repos={listing.skippedRepos} />
-            ) : (
-              "Anything you open shows up here."
-            )}
-          </EmptyGraphic>
-        ) : (
-          <SweepList
-            stages={STAGES}
-            runs={PR_RUNS}
-            items={items}
-            // Rows stay open, so each pull request shows its actions, except
-            // the ones waiting on someone else, which close to one line.
-            collapsible="later"
-            // Newest first with the minimized rows last, not grouped by tier.
-            order="given"
-            Link={UrlLink}
-            renderStartThread={(item) => {
-              const row = rowsByKey.get(item.key);
-              return row ? renderStartThread?.(row) : null;
-            }}
-            onNoteSave={(item, body) => {
-              const row = rowsByKey.get(item.key);
-              return row ? onNoteSave(row, body) : Promise.resolve(false);
-            }}
-            onOpenLink={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (row) onOpenLink(row);
-            }}
-            renderTrack={
-              renderTrack
-                ? (item, line) => {
-                    const row = rowsByKey.get(item.key);
-                    return row ? renderTrack(item, line, row) : null;
-                  }
-                : () => null
-            }
-            renderBody={(item, _open, line) => {
-              const row = rowsByKey.get(item.key);
-              return row ? (
-                <RowBody
-                  row={row}
-                  item={item}
-                  line={line}
-                  showRepo={showRepo}
-                  avatarFor={avatarFor}
-                  onDismissChecks={onDismissChecks}
-                />
-              ) : null;
-            }}
-            renderComments={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row) return null;
-              return (
-                <FeedbackDrawer
-                  url={row.url}
-                  age={(at) => relativeTime(at, now)}
-                  Link={UrlLink}
-                  load={async () => {
-                    const result = await loadFeedback(row);
-                    if (!result.error && row.newComments > 0) onOpenLink(row);
-                    return result;
-                  }}
-                />
-              );
-            }}
-            renderThreadLine={(item) => {
-              const row = rowsByKey.get(item.key);
-              const threadId = row?.threadId;
-              if (row && !threadId && isThreadStarting(item.key)) {
-                return <StartingThreadLine title={`${row.title} (#${row.number})`} />;
+          {listing.rows.length === 0 ? (
+            <EmptyGraphic
+              graphic={<NoPullRequestsGraphic />}
+              // The headline has to move too. "No open pull requests" is untrue
+              // on a machine that simply cannot see the thirty you have open.
+              headline={
+                listing.skippedRepos.length
+                  ? "Nothing from the repositories checked out here."
+                  : "No open pull requests."
               }
-              if (!row || !threadId) return null;
-              return <ThreadLine status={threadStatus?.(threadId) ?? null} onOpen={() => onOpen(row, threadId)} />;
-            }}
-            // The timer sits at the bottom right of the row, apart from the actions.
-            renderTrailing={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row || !harvest.available) return null;
-              return (
-                <HarvestRowClock
-                  surface="pull-requests"
-                  row={row}
-                  running={isRunningFor(harvest.running, row) ? harvest.running : null}
-                  client={harvest.client}
-                  onChanged={harvest.onStarted}
-                />
-              );
-            }}
-            renderActions={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row) return null;
-              return (
-                <>
-                  <ThreadAction
+            >
+              {listing.skippedRepos.length ? (
+                <SkippedRepos repos={listing.skippedRepos} />
+              ) : (
+                "Anything you open shows up here."
+              )}
+            </EmptyGraphic>
+          ) : (
+            <SweepList
+              stages={STAGES}
+              runs={PR_RUNS}
+              items={items}
+              // Rows stay open, so each pull request shows its actions, except
+              // the ones waiting on someone else, which close to one line.
+              collapsible="later"
+              // Newest first with the minimized rows last, not grouped by tier.
+              order="given"
+              Link={UrlLink}
+              renderStartThread={(item) => {
+                const row = rowsByKey.get(item.key);
+                return row ? renderStartThread?.(row) : null;
+              }}
+              onNoteSave={(item, body) => {
+                const row = rowsByKey.get(item.key);
+                return row ? onNoteSave(row, body) : Promise.resolve(false);
+              }}
+              onOpenLink={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (row) onOpenLink(row);
+              }}
+              renderTrack={
+                renderTrack
+                  ? (item, line) => {
+                      const row = rowsByKey.get(item.key);
+                      return row ? renderTrack(item, line, row) : null;
+                    }
+                  : () => null
+              }
+              renderBody={(item, _open, line) => {
+                const row = rowsByKey.get(item.key);
+                return row ? (
+                  <RowBody
                     row={row}
-                    isStarting={starting.has(item.key)}
-                    isThreadStarting={isThreadStarting(item.key)}
-                    isOpen={Boolean(renderStartThread?.(row))}
-                    onWork={onWork}
-                    onOpen={onOpen}
+                    item={item}
+                    line={line}
+                    showRepo={showRepo}
+                    avatarFor={avatarFor}
+                    onDismissChecks={onDismissChecks}
                   />
-                  {/* The tidy-up once the work a thread was started for is
-                      finished: the pull request has no flags left. */}
-                  {row.threadId && row.flags.length === 0 ? (
-                    <button type="button" className={LINE_ACTION} onClick={() => onArchive(row)}>
-                      <Icon name="Archive" className="size-3" />
-                      Archive thread
-                    </button>
-                  ) : null}
-                  <EarlierThreads row={row} onOpen={onOpen} />
-                  <CopyLinkAction
-                    text={`${row.title} (#${row.number})`}
+                ) : null;
+              }}
+              renderComments={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row) return null;
+                return (
+                  <FeedbackDrawer
                     url={row.url}
-                    write={writeLinkToClipboard}
+                    age={(at) => relativeTime(at, now)}
+                    Link={UrlLink}
+                    Markdown={Markdown}
+                    load={async () => {
+                      const result = await loadFeedback(row);
+                      if (!result.error && row.newComments > 0) onOpenLink(row);
+                      return result;
+                    }}
                   />
-                </>
-              );
-            }}
-          />
-        )}
-
-        {listing.rows.length > 0 && listing.skippedRepos.length ? (
-          <p className="text-xs break-words text-muted-foreground">
-            <SkippedRepos repos={listing.skippedRepos} />
-          </p>
-        ) : null}
+                );
+              }}
+              renderThreadLine={(item) => {
+                const row = rowsByKey.get(item.key);
+                const threadId = row?.threadId;
+                if (row && !threadId && isThreadStarting(item.key)) {
+                  return <StartingThreadLine title={`${row.title} (#${row.number})`} />;
+                }
+                if (!row || !threadId) return null;
+                return <ThreadLine status={threadStatus?.(threadId) ?? null} onOpen={() => onOpen(row, threadId)} />;
+              }}
+              // The timer sits at the bottom right of the row, apart from the actions.
+              renderTrailing={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row || !harvest.available) return null;
+                return (
+                  <HarvestRowClock
+                    surface="pull-requests"
+                    row={row}
+                    running={isRunningFor(harvest.running, row) ? harvest.running : null}
+                    client={harvest.client}
+                    onChanged={harvest.onStarted}
+                  />
+                );
+              }}
+              renderActions={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row) return null;
+                return (
+                  <>
+                    <ThreadAction
+                      row={row}
+                      isStarting={starting.has(item.key)}
+                      isThreadStarting={isThreadStarting(item.key)}
+                      isOpen={Boolean(renderStartThread?.(row))}
+                      onWork={onWork}
+                      onOpen={onOpen}
+                    />
+                    {/* The tidy-up once the work a thread was started for is
+                        finished: the pull request has no flags left. */}
+                    {row.threadId && row.flags.length === 0 ? (
+                      <button type="button" className={LINE_ACTION} onClick={() => onArchive(row)}>
+                        <Icon name="Archive" className="size-3" />
+                        Archive thread
+                      </button>
+                    ) : null}
+                    <EarlierThreads row={row} onOpen={onOpen} />
+                    <CopyLinkAction
+                      text={`${row.title} (#${row.number})`}
+                      url={row.url}
+                      write={writeLinkToClipboard}
+                    />
+                  </>
+                );
+              }}
+            />
+          )}
+        </div>
       </div>
+      {listing.rows.length > 0 ? (
+        <SkippedReposFooter
+          repos={listing.skippedRepos}
+          hint={'Add the project, or list the repository in the "Also sweep these repositories" setting.'}
+        />
+      ) : null}
     </div>
   );
 }

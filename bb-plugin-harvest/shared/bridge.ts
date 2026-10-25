@@ -93,7 +93,16 @@ export interface HarvestBridge {
   stopTimer(input: { entryId: number }): Promise<void>;
 }
 
-export function createHarvestBridge(bb: BbPluginApi): HarvestBridge {
+/**
+ * Only what the bridge uses, so a plugin pinned to another SDK version can
+ * pass its own `bb`.
+ */
+type BridgeHost = {
+  sdk: { plugins: Pick<BbPluginApi["sdk"]["plugins"], "callRpc"> };
+  log: Pick<BbPluginApi["log"], "warn">;
+};
+
+export function createHarvestBridge(bb: BridgeHost): HarvestBridge {
   function call<T>(method: string, outputSchema: z.ZodType<T>, input?: unknown): Promise<T> {
     return bb.sdk.plugins.callRpc({
       pluginId: HARVEST_PLUGIN_ID,

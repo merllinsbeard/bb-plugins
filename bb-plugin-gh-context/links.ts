@@ -58,7 +58,10 @@ const itemsSchema = z.array(
   z.object({ repo: z.string(), kind: itemKind, number: z.number(), source: z.string() }),
 );
 
-export function createThreadLinksBridge(bb: BbPluginApi): ThreadLinksBridge {
+/** Only what the bridge uses, so a plugin pinned to another SDK version can pass its own `bb`. */
+type BridgeHost = { sdk: { plugins: Pick<BbPluginApi["sdk"]["plugins"], "callRpc"> } };
+
+export function createThreadLinksBridge(bb: BridgeHost): ThreadLinksBridge {
   function call<T>(method: string, outputSchema: z.ZodType<T>, input: unknown): Promise<T> {
     return bb.sdk.plugins.callRpc({
       pluginId: GH_CONTEXT_PLUGIN_ID,

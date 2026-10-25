@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
-import { findTopBarAnchor, onPath, TopBarCount, TopBarSlot } from "./top-bar";
+import { endMargin, findTopBarAnchor, roomToEnd, onPath, TopBarCount, TopBarSlot } from "./top-bar";
 
 afterEach(() => {
   cleanup();
@@ -108,6 +108,36 @@ describe("findTopBarAnchor", () => {
   });
 });
 
+describe("endMargin", () => {
+  it("pushes the slot to 8px short of the open sidebar's right edge", () => {
+    // Slot ends at 260 with no margin; the column ends at 320.
+    expect(endMargin({ columnRight: 320, slotRight: 260, margin: 0 })).toBe(52);
+  });
+
+  it("keeps the same margin once the slot is there", () => {
+    expect(endMargin({ columnRight: 320, slotRight: 312, margin: 52 })).toBe(52);
+  });
+
+  it("follows the sidebar as it is dragged wider", () => {
+    expect(endMargin({ columnRight: 400, slotRight: 312, margin: 52 })).toBe(132);
+  });
+
+  it("stays beside the toggle when the slot does not fit, as on the rail alone", () => {
+    expect(endMargin({ columnRight: 49, slotRight: 312, margin: 52 })).toBe(0);
+  });
+});
+
+describe("roomToEnd", () => {
+  it("measures from where the slot starts beside the toggle, whatever its margin", () => {
+    expect(roomToEnd({ columnRight: 320, slotLeft: 114, margin: 0 })).toBe(198);
+    expect(roomToEnd({ columnRight: 320, slotLeft: 192, margin: 78 })).toBe(198);
+  });
+
+  it("is negative with the sidebar closed to its rail", () => {
+    expect(roomToEnd({ columnRight: 49, slotLeft: 114, margin: 0 })).toBeLessThan(0);
+  });
+});
+
 describe("onPath", () => {
   it("matches a prefix and the paths under it, not a longer name", () => {
     expect(onPath("/plugins/now/now", ["/plugins/now/now"])).toBe(true);
@@ -126,6 +156,8 @@ describe("TopBarSlot", () => {
     expect(chip.parentElement?.nextElementSibling).toBe(panel);
     // On the same line as the toggle, which bb nudges down.
     expect(chip.parentElement?.style.transform).toBe("translateY(2px)");
+    // bb's title bar takes no pointer events, so the slot turns them back on.
+    expect(chip.parentElement?.style.pointerEvents).toBe("auto");
   });
 
   it("puts its children at the top left, before the page title", async () => {

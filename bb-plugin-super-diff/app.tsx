@@ -179,6 +179,7 @@ function FileCard({
   index,
   patch,
   split,
+  wrap,
   notes,
   highlightId,
   collapsed,
@@ -189,6 +190,7 @@ function FileCard({
   index: number;
   patch: string | undefined;
   split: boolean;
+  wrap: boolean;
   notes: PlacedNote[];
   highlightId: string | null;
   collapsed: boolean;
@@ -230,7 +232,7 @@ function FileCard({
         {collapsed ? null : patch !== undefined ? (
           <Boundary>
             <div ref={bodyRef}>
-              <Diff patch={patch} path={file.path} view={split ? "split" : "unified"} />
+              <Diff patch={patch} path={file.path} view={split ? "split" : "unified"} overflow={wrap ? "wrap" : "scroll"} />
               <NoteRows containerRef={bodyRef} notes={notes} highlightId={highlightId} />
               <ExplainTrigger containerRef={bodyRef} onExplain={explain} />
             </div>
@@ -280,6 +282,7 @@ function GroupedList({
   data,
   stored,
   split,
+  wrap,
   nav,
   memory,
   explaining,
@@ -288,6 +291,7 @@ function GroupedList({
   data: Loaded;
   stored: StoredSuperDiff;
   split: boolean;
+  wrap: boolean;
   nav: Nav;
   memory: CardMemory;
   explaining: Explaining[];
@@ -485,6 +489,7 @@ function GroupedList({
                 index={index++}
                 patch={data.patches.get(file.path)}
                 split={split}
+                wrap={wrap}
                 notes={[
                   ...notes.filter((note) => note.path === file.path),
                   ...explaining.filter((entry) => entry.path === file.path).map(explainingNote),
@@ -885,6 +890,11 @@ function mount(pluginId: string, signal: AbortSignal): () => void {
     const selection = readSelection(toolbarRoot);
     const split =
       toolbarRoot.querySelector('button[aria-label="Split diff view"]')?.getAttribute("aria-pressed") === "true";
+    // bb's wrap toggle renames itself, so match either label and read aria-pressed.
+    const wrap =
+      toolbarRoot
+        .querySelector('button[aria-label="Wrap diff lines"], button[aria-label="Disable diff line wrap"]')
+        ?.getAttribute("aria-pressed") === "true";
     const mode = toolbarRoot.querySelector<HTMLElement>('[aria-label="Diff view mode"]');
     const segmentButton = mode?.querySelector("button");
 
@@ -942,6 +952,7 @@ function mount(pluginId: string, signal: AbortSignal): () => void {
         data={state.data}
         stored={state.stored}
         split={split}
+        wrap={wrap}
         nav={nav}
         memory={memoryOf(key)}
         explaining={state.explaining ?? []}

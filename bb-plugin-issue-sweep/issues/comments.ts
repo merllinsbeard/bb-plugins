@@ -1,3 +1,5 @@
+import { commentMarkdown, feedbackPerson, type FeedbackEntry } from "@danielb/gh-shared/gh";
+
 /**
  * How many of an issue's comments count as seen, given who wrote each one.
  *
@@ -15,63 +17,61 @@ export function seenThroughOwn(authors: readonly string[], seen: number, viewer:
   return Math.max(seen, last + 1);
 }
 
-/** One comment on an issue, as its drawer draws it. */
-export interface IssueComment {
-  author: string;
-  avatarUrl: string;
-  body: string;
-  url: string;
-  at: number;
-}
+/** One comment on an issue, as the comments drawer in `sweep-ui/feedback` draws it. */
+export type IssueComment = Extract<FeedbackEntry, { kind: "comment" }>;
 
 /** How many comments the drawer reads: the latest ones, which hold anything new. */
 export const COMMENTS_LIMIT = 50;
 
 export const COMMENTS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
       comments(last: ${COMMENTS_LIMIT}) {
         totalCount
-        nodes { author { login avatarUrl } bodyText url createdAt }
+        nodes { author { __typename login avatarUrl } body url createdAt }
       }
     }
   }
 }`;
 
 interface RawComment {
-  author?: { login?: string; avatarUrl?: string } | null;
-  bodyText?: string;
+  author?: { __typename?: string; login?: string; avatarUrl?: string } | null;
+  body?: string;
   url?: string;
   createdAt?: string;
 }
 
 /**
- * The latest comments, oldest first, and how many the issue has in all. A
- * deleted account's comment keeps its place, under "ghost", so the new ones
- * still line up with the end of the list.
+ * The latest comments, oldest first, each body the Markdown it was written
+ * in, and how many the issue has in all. A deleted account's comment keeps
+ * its place, under "ghost", so the new ones still line up with the end of the
+ * list.
  */
-export function parseComments(raw: string): { comments: IssueComment[]; total: number } {
+export function parseComments(raw: string): { entries: IssueComment[]; total: number } {
   const parsed = JSON.parse(raw) as {
     data?: {
+      viewer?: { login?: string };
       repository?: {
         issue?: { comments?: { totalCount?: number; nodes?: Array<RawComment | null> | null } } | null;
       } | null;
     };
   };
+  const viewer = parsed.data?.viewer?.login;
   const connection = parsed.data?.repository?.issue?.comments;
-  const comments = (connection?.nodes ?? []).flatMap((node) => {
+  const entries = (connection?.nodes ?? []).flatMap((node): IssueComment[] => {
     if (!node) return [];
     const at = node.createdAt ? Date.parse(node.createdAt) : NaN;
     return [
       {
-        author: node.author?.login ?? "ghost",
-        avatarUrl: node.author?.avatarUrl ?? "",
-        body: node.bodyText?.trim() ?? "",
+        kind: "comment",
+        ...(feedbackPerson(node.author, viewer) ?? { author: "ghost", avatarUrl: "" }),
+        body: commentMarkdown(node.body),
         url: node.url ?? "",
         at: Number.isNaN(at) ? 0 : at,
       },
     ];
   });
-  return { comments, total: connection?.totalCount ?? comments.length };
+  return { entries, total: connection?.totalCount ?? entries.length };
 }

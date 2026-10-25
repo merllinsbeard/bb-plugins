@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Issue Sweep",
-    "description": "Open GitHub issues assigned to you, split into what needs you and everything else grouped by board status, with local notes, an On hold box that sinks an issue to the bottom, new comment counts, and the comments a click away. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its counts also sit in bb's top bar on every page, and clicking them opens the list. Needs gh-context.",
+    "description": "Open GitHub issues assigned to you, split into what needs you and everything else grouped by board status, with local notes, an On hold box that sinks an issue to the bottom, new comment counts, and the comments a click away. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Needs gh-context.",
     "branding": {
       "icon": "ListTodo"
     },
@@ -30,7 +30,7 @@
     "@radix-ui/react-slot": "^1.3.0",
     "bb-plugin-gh-context": "file:../bb-plugin-gh-context",
     "bb-plugin-harvest": "file:../bb-plugin-harvest",
-    "@danielbachhuber/bb-plugin-component-library": "^1.3.0",
+    "@danielbachhuber/bb-plugin-component-library": "^1.4.0",
     "sweep-ui": "file:../sweep-ui",
     "zod": "4.6.7"
   },

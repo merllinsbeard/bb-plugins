@@ -253,7 +253,7 @@ function TitleBarRow({ label, session, weeklyLimit }: { label: string; session: 
   );
 }
 
-/** The session in bb's title bar, after the other plugins' buttons: its tokens per 15 minutes from its start to its reset, so the empty space is the time left, and two rings for the percent used: the session outside, the week inside. Once it's amber or red, the time left fills with hatched bars at the past hour's pace. Hovering shows the page's meters; clicking opens the page. */
+/** The session in bb's title bar, after the other plugins' buttons: its tokens per 15 minutes from its start to its reset, with a dot for each 15 minutes still to come, and two rings for the percent used: the session outside, the week inside. Hovering shows the page's meters; clicking opens the page. */
 export const TitleBar = () => (
   <div data-screenshot-frame className="w-[720px] p-4">
   <StoryCard>
@@ -290,12 +290,14 @@ export const TitleBarHovered = () => (
 
 // A stand-in for bb's title bar across the top of the window: the window
 // controls, back and forward, and the sidebar toggle; then the plugin's
-// button; and the right-panel toggle at the far end.
-function WindowTitleBar({ children }: { children: ReactNode }) {
+// button, at the right edge of the sidebar column while the sidebar is open
+// (`sidebar` is its width) or beside the toggle while it is closed; and the
+// right-panel toggle at the far end.
+function WindowTitleBar({ children, sidebar = 300 }: { children: ReactNode; sidebar?: number | null }) {
   const icon = "inline-flex size-7 items-center justify-center text-muted-foreground [&_svg]:size-4";
-  return (
-    <div className="flex h-10 shrink-0 items-center gap-1.5 border-x border-t border-border bg-background px-3">
-      <span className="flex gap-2 pr-3">
+  const controls = (
+    <>
+      <span className="flex shrink-0 gap-2 pr-3">
         <span className="size-3 rounded-full" style={{ background: "#ff5f57" }} />
         <span className="size-3 rounded-full" style={{ background: "#febc2e" }} />
         <span className="size-3 rounded-full" style={{ background: "#28c840" }} />
@@ -309,7 +311,21 @@ function WindowTitleBar({ children }: { children: ReactNode }) {
       <span className={icon}>
         <HugeiconsIcon icon={PanelLeftIcon} />
       </span>
-      {children}
+    </>
+  );
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-1.5 border-x border-t border-border bg-background px-3">
+      {sidebar === null ? (
+        <>
+          {controls}
+          {children}
+        </>
+      ) : (
+        <div className="-ml-3 flex h-full shrink-0 items-center gap-1.5 border-r border-border pl-3 pr-2" style={{ width: sidebar }}>
+          {controls}
+          <span className="ml-auto flex">{children}</span>
+        </div>
+      )}
       <span className={`ml-auto ${icon}`}>
         <HugeiconsIcon icon={PanelRightIcon} />
       </span>
@@ -348,9 +364,9 @@ export const WindowWithLimits = () => (
 );
 
 /**
- * The session in bb's title bar, beside the window's own buttons, with its
- * limits open: a session on pace for 95% by its reset, so
- * the button and the meter are amber.
+ * The session in bb's title bar, at the right edge of the open sidebar, with
+ * its limits open: a session on pace for 95% by its reset, so the button and
+ * the meter are amber.
  */
 export const TitleBarInWindow = () => (
   <div data-screenshot-frame className="w-[1400px] bg-background" style={{ height: 420 }}>
@@ -367,6 +383,34 @@ export const TitleBarInWindow = () => (
     </WindowTitleBar>
   </div>
 );
+
+/**
+ * The session in bb's title bar when the sidebar has no room for the spark
+ * chart: dragged narrow, the rings sit alone at its edge; closed, they sit
+ * beside the sidebar toggle.
+ */
+export const TitleBarNarrowSidebar = () => {
+  const session = { ...ON_PACE[0]!, slots: SESSION_SLOTS, lastHourTokens: 12_000_000 };
+  const button = (
+    <TopBarLimits session={session} limits={ON_PACE} now={NOW.getTime()} providerName={() => "Claude Code"} onOpen={noop} compact />
+  );
+  return (
+    <div data-screenshot-frame className="w-[720px] p-4">
+      <StoryCard>
+        <StoryRow label="Narrow sidebar" hint="Too narrow for the spark chart, so only the rings show.">
+          <div className="w-[520px]">
+            <WindowTitleBar sidebar={220}>{button}</WindowTitleBar>
+          </div>
+        </StoryRow>
+        <StoryRow label="Sidebar closed" hint="The rings sit beside the sidebar toggle.">
+          <div className="w-[520px]">
+            <WindowTitleBar sidebar={null}>{button}</WindowTitleBar>
+          </div>
+        </StoryRow>
+      </StoryCard>
+    </div>
+  );
+};
 
 // The README's image for the context meter, and the store's.
 /**

@@ -15,6 +15,7 @@ import {
 import { relativeTime } from "./sweep/format";
 import { FeedbackDrawer, FeedbackList, type FeedbackEntry } from "sweep-ui/feedback";
 import { PlainLink } from "sweep-ui/row";
+import { Markdown } from "@get-bb/plugin-sdk/app";
 
 export default {
   title: "pr-sweep/PR list",
@@ -477,6 +478,43 @@ const FEEDBACK: FeedbackEntry[] = [
   },
 ];
 
+/** A review in Markdown, too long for three lines, a short comment that fits, and a bot's report. */
+const LONG_BODY_FEEDBACK: FeedbackEntry[] = [
+  {
+    kind: "review",
+    author: "hubber",
+    avatarUrl: avatarFor("hubber"),
+    state: "commented",
+    body: [
+      "The export shape works: rows stream in order, owners resolve once per page, and the header row matches the import format. Three points:",
+      "",
+      "1. **A failed page starts over.** The retry in `exportRows` (`export/csv.ts:88`) begins again from the first page, so a flaky connection writes the early rows twice.",
+      "2. **The file name uses local time,** which sorts badly next to the scheduled job's exports. See [the naming notes](https://example.test/naming).",
+      "3. Nit: `toCsvRow` still has the old doc comment.",
+    ].join("\n"),
+    url: "https://github.com/acme/widgets/pull/487",
+    at: now - 26 * HOUR,
+  },
+  {
+    kind: "comment",
+    author: "octocat",
+    avatarUrl: avatarFor("octocat"),
+    body: "Agreed on the retry.",
+    url: "https://github.com/acme/widgets/pull/487",
+    at: now - 25 * HOUR,
+  },
+  {
+    kind: "comment",
+    author: "acme-ci",
+    avatarUrl: "",
+    bot: true,
+    // As fetchFeedback returns it, with the bot's <details> and <sub> tags taken out.
+    body: "### Preview\n\nVisit the [preview](https://example.test/preview) for 4f2c9e1.\n\nBuild log\n\nBuilt in 42s.",
+    url: "https://github.com/acme/widgets/pull/487",
+    at: now - 25 * HOUR,
+  },
+];
+
 /** A long design review: 40 earlier comments before #487's, so the drawer opens on its newest 10. */
 const LONG_FEEDBACK: FeedbackEntry[] = [
   ...Array.from({ length: 40 }, (_, index): FeedbackEntry => ({
@@ -618,7 +656,9 @@ export function Rows() {
  * The drawer a row's comment count opens. The review that requested changes
  * comes first, then the threads still open, unanswered ones marked in red,
  * then general comments. Resolved threads wait behind "1 resolved". Each entry
- * opens on GitHub. Then a long list, which opens on its newest 10 under
+ * opens on GitHub. Comments are drawn as the Markdown they were written in,
+ * and one longer than three lines is cut there, with Show more under it to
+ * read the rest in place. Then a long list, which opens on its newest 10 under
  * "Show 37 earlier", the drawer while it reads, when GitHub fails, and with
  * nothing open.
  */
@@ -631,13 +671,16 @@ export function CommentsDrawer() {
   return (
     <StoryCard>
       <StoryRow label="Open" hint="What reviewers left on #487.">
-        {box(<FeedbackList entries={FEEDBACK} age={age} url={url} Link={PlainLink} />)}
+        {box(<FeedbackList entries={FEEDBACK} age={age} url={url} Link={PlainLink} Markdown={Markdown} />)}
+      </StoryRow>
+      <StoryRow label="Long comment" hint="Cut at three lines, with Show more.">
+        {box(<FeedbackList entries={LONG_BODY_FEEDBACK} age={age} url={url} Link={PlainLink} Markdown={Markdown} />)}
       </StoryRow>
       <StoryRow label="Long" hint="More than 10 entries: the newest 10, the rest behind Show earlier.">
-        {box(<FeedbackList entries={LONG_FEEDBACK} age={age} url={url} Link={PlainLink} />)}
+        {box(<FeedbackList entries={LONG_FEEDBACK} age={age} url={url} Link={PlainLink} Markdown={Markdown} />)}
       </StoryRow>
       <StoryRow label="Reading" hint="While the one request to GitHub runs.">
-        <FeedbackDrawer load={() => new Promise(() => {})} age={age} url={url} Link={PlainLink} />
+        <FeedbackDrawer load={() => new Promise(() => {})} age={age} url={url} Link={PlainLink} Markdown={Markdown} />
       </StoryRow>
       <StoryRow label="Failed" hint="GitHub could not be reached.">
         <FeedbackDrawer
@@ -645,10 +688,11 @@ export function CommentsDrawer() {
           age={age}
           url={url}
           Link={PlainLink}
+          Markdown={Markdown}
         />
       </StoryRow>
       <StoryRow label="Nothing open" hint="Every thread resolved.">
-        {box(<FeedbackList entries={FEEDBACK.slice(0, 1)} age={age} url={url} Link={PlainLink} />)}
+        {box(<FeedbackList entries={FEEDBACK.slice(0, 1)} age={age} url={url} Link={PlainLink} Markdown={Markdown} />)}
       </StoryRow>
     </StoryCard>
   );
@@ -686,7 +730,7 @@ export function States() {
       </StoryRow>
       <StoryRow
         label="Repositories not swept"
-        hint="A repository with no project checked out here, named below the list."
+        hint="A repository with no project checked out here, counted at the bottom of the panel, named on hover."
       >
         <Frame listing={{ ...baseline, skippedRepos: ["acme/gadgets"] }} />
       </StoryRow>

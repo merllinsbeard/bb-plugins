@@ -13,7 +13,7 @@
 // engine shows that in the toolbar and logs it rather than quietly dropping
 // the progress. See `DiffFilesPanel` in bb's
 // apps/app/src/components/secondary-panel/git-diff to update it.
-import type { DiffFileEntry } from "./marks";
+import type { DiffFileEntry, DiffTarget } from "./marks";
 
 /** The virtualizer row around each card. `data-index` is bb's own. */
 const ROW_SELECTOR = "[data-index]";
@@ -22,7 +22,7 @@ const ROW_SELECTOR = "[data-index]";
 const MAX_DEPTH = 12;
 
 export type DiffFilesRead =
-  | { status: "ok"; files: DiffFileEntry[]; targetType: string | null }
+  | { status: "ok"; files: DiffFileEntry[]; target: DiffTarget }
   | { status: "unreadable"; reason: string };
 
 interface Fiber {
@@ -48,8 +48,26 @@ function isEntry(value: unknown): value is DiffFileEntry {
     typeof entry.changeKind === "string" &&
     typeof entry.additions === "number" &&
     typeof entry.deletions === "number" &&
-    typeof entry.binary === "boolean"
+    typeof entry.binary === "boolean" &&
+    typeof entry.revision === "string" &&
+    entry.revision !== ""
   );
+}
+
+function isTarget(value: unknown): value is DiffTarget {
+  if (typeof value !== "object" || value === null) return false;
+  const target = value as Record<string, unknown>;
+  switch (target.type) {
+    case "uncommitted":
+      return true;
+    case "branch_committed":
+    case "all":
+      return typeof target.mergeBaseBranch === "string" && target.mergeBaseBranch !== "";
+    case "commit":
+      return typeof target.sha === "string" && /^[0-9a-f]{4,40}$/i.test(target.sha);
+    default:
+      return false;
+  }
 }
 
 /**
@@ -78,11 +96,10 @@ export function readDiffFiles(row: Element): DiffFilesRead {
           reason: `file ${bad} does not have the fields this plugin reads`,
         };
       }
-      const targetType =
-        typeof target === "object" && target !== null && "type" in target
-          ? String((target as { type: unknown }).type)
-          : null;
-      return { status: "ok", files: files as DiffFileEntry[], targetType };
+      if (!isTarget(target)) {
+        return { status: "unreadable", reason: "`target` is not a range this plugin knows" };
+      }
+      return { status: "ok", files: files as DiffFileEntry[], target };
     }
     fiber = fiber.return ?? null;
   }
@@ -92,7 +109,7 @@ export function readDiffFiles(row: Element): DiffFilesRead {
   };
 }
 
-/** The virtualizer row a card header sits in, if any. */
-export function rowOf(headerRow: Element): Element | null {
-  return headerRow.closest(ROW_SELECTOR);
+/** The virtualizer row an element of a card sits in, if any. */
+export function rowOf(element: Element): Element | null {
+  return element.closest(ROW_SELECTOR);
 }

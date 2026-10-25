@@ -58,14 +58,20 @@ export interface IssueRow {
    * read back without it.
    */
   parent?: IssueParent | null;
-  /** The status column on the configured board, or null when it has none. */
+  /** The status column on the issue's board, or null when it has none. */
   boardStatus: string | null;
   /**
-   * True when the issue sits on the configured board at all. Distinct from a
-   * non-null status: an issue can be on the board in its "No Status" column,
-   * and offering to add that one again would do nothing.
+   * True when the issue sits on one of the configured boards at all. Distinct
+   * from a non-null status: an issue can be on the board in its "No Status"
+   * column, and offering to add that one again would do nothing.
    */
   onBoard: boolean;
+  /**
+   * The first configured board the issue is on, which its status comes from
+   * and its moves go to. Optional because rows stored before there could be
+   * more than one board have none until the next sweep.
+   */
+  board?: string | null;
 }
 
 export interface SweepResult {
@@ -115,6 +121,7 @@ export function toRow(raw: RawIssue, board = ""): IssueRow | null {
     parent: null,
     boardStatus: placement.status,
     onBoard: placement.onBoard,
+    board: placement.board,
   };
 }
 

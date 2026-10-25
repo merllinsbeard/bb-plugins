@@ -161,7 +161,7 @@ export async function fetchComments(
   gh: GhRunner,
   repo: string,
   number: number,
-): Promise<{ comments: IssueComment[]; total: number }> {
+): Promise<{ entries: IssueComment[]; total: number }> {
   if (!REPO_SLUG_PATTERN.test(repo)) throw new Error(`not a repository: ${repo}`);
   const [owner, name] = repo.split("/");
   const raw = await gh.run([

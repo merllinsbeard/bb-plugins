@@ -28,7 +28,8 @@ export function PlainLink({ href, className, onClick, children }: SweepLinkProps
   );
 }
 
-const BLUE_TEXT = "text-[#0b57d0] dark:text-[#a8c7fa]";
+/** The blue of "N new", here and in the comments drawer. */
+export const BLUE_TEXT = "text-[#0b57d0] dark:text-[#a8c7fa]";
 const BLUE_DOT = "bg-[#0b57d0] dark:bg-[#a8c7fa]";
 
 /** Rows with a flag are tinted the way Now tints them: red for stale, slate for blocked. */

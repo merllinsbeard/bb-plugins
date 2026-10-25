@@ -40,6 +40,7 @@ vi.mock("@get-bb/plugin-sdk/app", () => ({
 
 vi.mock("@danielbachhuber/bb-plugin-component-library/top-bar", () => ({
   TopBarSlot: ({ children }: { children: ReactNode }) => children,
+  useTopBarRoom: () => null,
 }));
 vi.mock("@/components/limit-spark", () => ({
   urgentSession: (limits: { usedPercent: number }[]) => limits[0] ?? null,

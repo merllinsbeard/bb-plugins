@@ -8,12 +8,13 @@ import {
   nextMonday,
   type DayChoice,
 } from "@danielbachhuber/bb-plugin-component-library/day-menu";
-import { UrlLink } from "@get-bb/plugin-sdk/app";
+import { Markdown, UrlLink } from "@get-bb/plugin-sdk/app";
 import { ThreadLine, OpenThreadAction, StartingThreadLine, type ThreadStatus } from "@danielbachhuber/bb-plugin-component-library/thread-status";
 import { CopyLinkAction, LINE_ACTION } from "sweep-ui/actions";
 import { StatusBanner } from "sweep-ui/banner";
 import { FeedbackDrawer, type FeedbackResult } from "sweep-ui/feedback";
 import { SweepList } from "sweep-ui/list";
+import { SkippedReposFooter } from "sweep-ui/skipped-repos";
 import {
   Avatar,
   ChecksBadge,
@@ -601,126 +602,130 @@ export function ReviewListView({
   }));
 
   return (
-    <div className="h-full overflow-auto p-4 md:p-5">
-      <div className="mx-auto w-full max-w-6xl space-y-5">
-        {listing.lastError ? (
-          <p className="rounded-lg border border-border p-3 text-sm text-destructive">
-            {listing.lastError}
-          </p>
-        ) : null}
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+        <div className="mx-auto w-full max-w-6xl space-y-5">
+          {listing.lastError ? (
+            <p className="rounded-lg border border-border p-3 text-sm text-destructive">
+              {listing.lastError}
+            </p>
+          ) : null}
 
-        {listing.truncated ? (
-          <p className="text-xs text-muted-foreground">
-            The sweep hit GitHub's search ceiling, so this list may be incomplete.
-          </p>
-        ) : null}
+          {listing.truncated ? (
+            <p className="text-xs text-muted-foreground">
+              The sweep hit GitHub's search ceiling, so this list may be incomplete.
+            </p>
+          ) : null}
 
-        {listing.rows.length === 0 ? (
-          <NothingToReview skippedRepos={listing.skippedRepos} />
-        ) : (
-          <SweepList
-            stages={STAGES}
-            runs={REVIEW_RUNS}
-            items={items}
-            Link={UrlLink}
-            renderStartThread={(item) => {
-              const row = rowsByKey.get(item.key);
-              return row ? renderStartThread?.(row) : null;
-            }}
-            onNoteSave={(item, body) => {
-              const row = rowsByKey.get(item.key);
-              return row ? onNoteSave(row, body) : Promise.resolve(false);
-            }}
-            onOpenLink={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (row) onOpenLink(row);
-            }}
-            // No stage track: the banner and the icons say where a review stands.
-            renderTrack={() => null}
-            renderBody={(item, _open, line) => {
-              const row = rowsByKey.get(item.key);
-              return row ? (
-                <RowBody row={row} line={line} now={now} inputs={inputs} showRepo={showRepo} avatarFor={avatarFor} />
-              ) : null;
-            }}
-            // Every row stays open, since each review is one to do, except a
-            // snoozed one, which closes to one line at the bottom.
-            collapsible="later"
-            summaryAction={
-              onBatch ? <BatchButton count={listing.rows.filter(canBatch).length} onBatch={onBatch} /> : undefined
-            }
-            renderComments={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row) return null;
-              return (
-                <FeedbackDrawer
-                  url={row.url}
-                  age={(at) => relativeTime(at, now)}
-                  Link={UrlLink}
-                  load={async () => {
-                    const result = await loadFeedback(row);
-                    if (!result.error && row.newComments > 0) onOpenLink(row);
-                    return result;
-                  }}
-                />
-              );
-            }}
-            renderThreadLine={(item) => {
-              const row = rowsByKey.get(item.key);
-              const threadId = row?.threadId;
-              if (row && !threadId && isThreadStarting(item.key)) {
-                return <StartingThreadLine title={`${row.title} (#${row.number})`} />;
+          {listing.rows.length === 0 ? (
+            <NothingToReview skippedRepos={listing.skippedRepos} />
+          ) : (
+            <SweepList
+              stages={STAGES}
+              runs={REVIEW_RUNS}
+              items={items}
+              Link={UrlLink}
+              renderStartThread={(item) => {
+                const row = rowsByKey.get(item.key);
+                return row ? renderStartThread?.(row) : null;
+              }}
+              onNoteSave={(item, body) => {
+                const row = rowsByKey.get(item.key);
+                return row ? onNoteSave(row, body) : Promise.resolve(false);
+              }}
+              onOpenLink={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (row) onOpenLink(row);
+              }}
+              // No stage track: the banner and the icons say where a review stands.
+              renderTrack={() => null}
+              renderBody={(item, _open, line) => {
+                const row = rowsByKey.get(item.key);
+                return row ? (
+                  <RowBody row={row} line={line} now={now} inputs={inputs} showRepo={showRepo} avatarFor={avatarFor} />
+                ) : null;
+              }}
+              // Every row stays open, since each review is one to do, except a
+              // snoozed one, which closes to one line at the bottom.
+              collapsible="later"
+              summaryAction={
+                onBatch ? <BatchButton count={listing.rows.filter(canBatch).length} onBatch={onBatch} /> : undefined
               }
-              if (!row || !threadId) return null;
-              return <ThreadLine status={threadStatus?.(threadId) ?? null} onOpen={() => onOpen(row, threadId)} />;
-            }}
-            // The timer sits at the bottom right of the row, apart from the actions.
-            renderTrailing={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row || !harvest.available) return null;
-              return (
-                <HarvestRowClock
-                  surface="reviews"
-                  preferredTaskName="Code Review"
-                  row={row}
-                  running={isRunningFor(harvest.running, row) ? harvest.running : null}
-                  client={harvest.client}
-                  onChanged={harvest.onStarted}
-                />
-              );
-            }}
-            renderActions={(item) => {
-              const row = rowsByKey.get(item.key);
-              if (!row) return null;
-              return (
-                <>
-                  <ThreadAction
-                    row={row}
-                    isStarting={starting.has(item.key)}
-                    isThreadStarting={isThreadStarting(item.key)}
-                    isOpen={Boolean(renderStartThread?.(row))}
-                    onReview={onReview}
-                    onOpen={onOpen}
-                  />
-                  <ArchiveAction row={row} onArchive={onArchive} />
-                  <SnoozeAction row={row} now={now} onSnooze={onSnooze} />
-                  <CopyLinkAction
-                    text={`${row.title} (#${row.number})`}
+              renderComments={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row) return null;
+                return (
+                  <FeedbackDrawer
                     url={row.url}
-                    write={writeLinkToClipboard}
+                    age={(at) => relativeTime(at, now)}
+                    Link={UrlLink}
+                    Markdown={Markdown}
+                    load={async () => {
+                      const result = await loadFeedback(row);
+                      if (!result.error && row.newComments > 0) onOpenLink(row);
+                      return result;
+                    }}
                   />
-                </>
-              );
-            }}
-          />
-        )}
-
-        {listing.rows.length > 0 && listing.skippedRepos.length ? (
-          <p className="text-xs break-words text-muted-foreground">
-            Not shown: {listing.skippedRepos.join(", ")} — no project checked out here.
-          </p>
-        ) : null}
+                );
+              }}
+              renderThreadLine={(item) => {
+                const row = rowsByKey.get(item.key);
+                const threadId = row?.threadId;
+                if (row && !threadId && isThreadStarting(item.key)) {
+                  return <StartingThreadLine title={`${row.title} (#${row.number})`} />;
+                }
+                if (!row || !threadId) return null;
+                return <ThreadLine status={threadStatus?.(threadId) ?? null} onOpen={() => onOpen(row, threadId)} />;
+              }}
+              // The timer sits at the bottom right of the row, apart from the actions.
+              renderTrailing={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row || !harvest.available) return null;
+                return (
+                  <HarvestRowClock
+                    surface="reviews"
+                    preferredTaskName="Code Review"
+                    row={row}
+                    running={isRunningFor(harvest.running, row) ? harvest.running : null}
+                    client={harvest.client}
+                    onChanged={harvest.onStarted}
+                  />
+                );
+              }}
+              renderActions={(item) => {
+                const row = rowsByKey.get(item.key);
+                if (!row) return null;
+                return (
+                  <>
+                    <ThreadAction
+                      row={row}
+                      isStarting={starting.has(item.key)}
+                      isThreadStarting={isThreadStarting(item.key)}
+                      isOpen={Boolean(renderStartThread?.(row))}
+                      onReview={onReview}
+                      onOpen={onOpen}
+                    />
+                    <ArchiveAction row={row} onArchive={onArchive} />
+                    <SnoozeAction row={row} now={now} onSnooze={onSnooze} />
+                    <CopyLinkAction
+                      text={`${row.title} (#${row.number})`}
+                      url={row.url}
+                      write={writeLinkToClipboard}
+                    />
+                  </>
+                );
+              }}
+            />
+          )}
+        </div>
       </div>
+      {listing.rows.length > 0 ? (
+        <SkippedReposFooter
+          repos={listing.skippedRepos}
+          label="Not shown"
+          hint={'Add the project, or list the repository in the "Also show these repositories" setting.'}
+        />
+      ) : null}
     </div>
   );
 }

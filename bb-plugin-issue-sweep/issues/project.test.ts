@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BoardUnavailableError,
-  fetchBoardProject,
+  fetchBoardProjects,
   ownerOf,
   parseAddedItemId,
   parseIssueItemId,
@@ -201,38 +201,53 @@ describe("ownerOf", () => {
   });
 });
 
-describe("fetchBoardProject", () => {
+describe("fetchBoardProjects", () => {
   it("resolves the board and its Status field in two calls", async () => {
     const gh = runner([PROJECTS, FIELDS]);
-    const project = await fetchBoardProject(gh, "acme", "Acme Board");
+    const [project] = await fetchBoardProjects(gh, "acme", ["Acme Board"]);
 
-    expect(project.id).toBe("PVT_board");
-    expect(project.statusFieldId).toBe("PVTSSF_status");
-    expect(project.statusOptions).toHaveLength(3);
+    expect(project?.id).toBe("PVT_board");
+    expect(project?.statusFieldId).toBe("PVTSSF_status");
+    expect(project?.statusOptions).toHaveLength(3);
     expect(gh.calls[0]).toEqual(["project", "list", "--owner", "acme", "--format", "json"]);
     expect(gh.calls[1]).toEqual([
       "project", "field-list", "7", "--owner", "acme", "--format", "json",
     ]);
   });
 
+  it("returns every listed board the owner has, in the list's order", async () => {
+    const gh = runner([PROJECTS, FIELDS, FIELDS]);
+    const projects = await fetchBoardProjects(gh, "acme", ["Acme Board", "Discovery"]);
+    expect(projects.map((project) => project.id)).toEqual(["PVT_board", "PVT_other"]);
+    // One listing for the owner, then one field list per board.
+    expect(gh.calls).toHaveLength(3);
+  });
+
+  it("skips a listed board the owner does not have", async () => {
+    // The list spans owners, so another owner's board is missing here.
+    const gh = runner([PROJECTS, FIELDS]);
+    const projects = await fetchBoardProjects(gh, "acme", ["Octocat's Board", "Acme Board"]);
+    expect(projects.map((project) => project.id)).toEqual(["PVT_board"]);
+  });
+
   it("refuses to guess when no board is configured", async () => {
     const gh = runner([]);
-    await expect(fetchBoardProject(gh, "acme", "")).rejects.toBeInstanceOf(BoardUnavailableError);
+    await expect(fetchBoardProjects(gh, "acme", [])).rejects.toBeInstanceOf(BoardUnavailableError);
     // And spends nothing finding that out.
     expect(gh.calls).toHaveLength(0);
   });
 
-  it("names the board it could not find", async () => {
+  it("names the boards it could not find", async () => {
     const gh = runner([PROJECTS]);
-    await expect(fetchBoardProject(gh, "acme", "Missing")).rejects.toThrow(/Missing/);
+    await expect(fetchBoardProjects(gh, "acme", ["Missing", "Gone"])).rejects.toThrow(/Missing.*Gone/);
   });
 
   it("still returns the board when it has no Status field", async () => {
     // The board is real and issues can be added to it; only the picker is lost.
     const gh = runner([PROJECTS, JSON.stringify({ fields: [] })]);
-    const project = await fetchBoardProject(gh, "acme", "Acme Board");
-    expect(project.id).toBe("PVT_board");
-    expect(project.statusFieldId).toBeNull();
+    const [project] = await fetchBoardProjects(gh, "acme", ["Acme Board"]);
+    expect(project?.id).toBe("PVT_board");
+    expect(project?.statusFieldId).toBeNull();
   });
 });
 

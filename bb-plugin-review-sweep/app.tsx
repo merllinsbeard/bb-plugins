@@ -14,14 +14,12 @@ import {
   useStartThreadBox,
   type StartThreadDraft,
 } from "@danielbachhuber/bb-plugin-component-library/start-thread";
-import { Icon } from "@/components/ui/icon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { displaySection } from "./review/actions.js";
 import { describeDay } from "@danielbachhuber/bb-plugin-component-library/parse-day";
 import { runOf, sortReviews } from "./review/tiers.js";
 import { BatchDialog, type BatchStart } from "./review/batch-dialog.js";
-import { SidebarCount } from "@danielbachhuber/bb-plugin-component-library/sidebar-count";
-import { TopBarCount, TopBarSlot } from "@danielbachhuber/bb-plugin-component-library/top-bar";
+import { navBadgeRedContentScript, needsYouBadge } from "@danielbachhuber/bb-plugin-component-library/nav-badge";
 import {
   ReviewListView,
   canBatch,
@@ -366,55 +364,31 @@ function Panel() {
 }
 
 /**
- * Beside Reviews in the sidebar: the requests waiting too long in a red
- * circle, as Now shows its urgent rows, then every request still to review,
- * which includes them. The circle is left out at zero, and both are when
- * nothing is waiting.
+ * Reviews' badge in bb's sidebar and rail: the requests still to review that
+ * have waited too long, in red, as Now counts its urgent rows.
  */
-function NeedsReviewCount() {
-  const counts = useCounts();
-  return counts && <SidebarCount {...counts} />;
-}
-
-/** The requests waiting too long and every request still to review, or null until the list loads. */
-function useCounts() {
+function useReviewsBadge() {
   const { listing } = useListing();
-  const rows =
-    listing?.rows.filter(
-      (row) =>
-        !row.snoozedUntil && displaySection(Boolean(row.threadId), row.isDraft) === "needs-review",
-    ) ?? [];
   if (!listing) return null;
   const inputs = { staleAfterDays: listing.staleAfterDays, now: Date.now() };
-  const overdue = rows.filter((row) => runOf(row, inputs) === "overdue").length;
-  return {
-    urgent: overdue,
-    total: rows.length,
-    urgentLabel: `${overdue} waiting too long`,
-    totalLabel: `${rows.length} to review`,
-  };
-}
-
-/** The same counts in bb's top bar on every page, as a button that opens Reviews. */
-function ReviewsTopBar() {
-  const navigate = useBbNavigate();
-  const counts = useCounts() ?? { urgent: 0, total: 0, urgentLabel: "", totalLabel: "" };
-  return (
-    <TopBarSlot pluginId="review-sweep" order={3} activeOn={["/plugins/review-sweep/reviews"]}>
-      <TopBarCount icon={<Icon name="Eye" />} label="Open Reviews" onClick={() => navigate.toPluginPanel("reviews")} {...counts} />
-    </TopBarSlot>
-  );
+  const overdue = listing.rows.filter(
+    (row) =>
+      !row.snoozedUntil &&
+      displaySection(Boolean(row.threadId), row.isDraft) === "needs-review" &&
+      runOf(row, inputs) === "overdue",
+  ).length;
+  return needsYouBadge({ urgent: overdue, urgentLabel: `${overdue} waiting too long` });
 }
 
 export default definePluginApp((app) => {
-  app.slots.experimental_appOverlay({ id: "reviews-top-bar", component: ReviewsTopBar });
+  app.contentScripts.register(navBadgeRedContentScript);
   app.slots.navPanel({
     id: "reviews",
     title: "Reviews",
     icon: "Eye",
     path: "reviews",
     component: Panel,
-    experimental_sidebarAccessory: NeedsReviewCount,
     headerContent: SyncHeader,
+    experimental_useBadge: useReviewsBadge,
   });
 });

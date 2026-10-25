@@ -1,17 +1,18 @@
-// bb's own changes panel, its toolbar and diff cards, with the plugin's engine
-// decorating it exactly as the content script does in bb. Only the RPC is a
-// stand-in, answering from each story's fixture marks and pull request.
+// bb's own changes panel, its toolbar and diff cards with bb's Viewed
+// checkboxes, with the plugin's engine decorating it exactly as the content
+// script does in bb. Only the RPC is a stand-in, answering from each story's
+// marks and pull request.
 //
 // The README's screenshots are captures of these stories.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DiffFileEntry } from "@bb/server-contract";
 import { GitDiffToolbar } from "@bb-app/components/secondary-panel/GitDiffToolbar";
 import { DiffFileCard } from "@bb-app/components/secondary-panel/git-diff/DiffFileCard";
+import { DEFAULT_DIFF_FILE_FILTERS } from "@bb-app/components/secondary-panel/git-diff/diff-file-filters";
 import { DEFAULT_CODE_OVERFLOW_MODE } from "@bb-app/lib/code-overflow-mode";
 import { STYLE_TEXT } from "./viewed/dom";
-import { startEngine } from "./viewed/engine";
+import { startEngine, type SyncResult } from "./viewed/engine";
 import type { GithubState } from "./viewed/github";
-import type { ViewedRecord } from "./viewed/marks";
 
 export default {
   title: "diff-viewed/Changes Panel",
@@ -163,6 +164,7 @@ function entry(path: string, additions: number, deletions: number): DiffFileEntr
     binary: false,
     origin: "tracked",
     loadMode: "auto",
+    revision: `100644:${path.length}a:100644:${additions}${deletions}b`,
   };
 }
 
@@ -191,61 +193,45 @@ function pull(viewed: readonly string[], overrides: Record<string, [number, numb
 }
 
 interface Fixture {
-  record: ViewedRecord;
+  /** The files bb has marked viewed. */
+  viewed: readonly string[];
   github: GithubState | null;
-  /** Never answer viewed_list, to hold the panel in its loading state. */
-  holdGithub?: boolean;
-  /** Start with Only unviewed on. */
-  onlyUnviewed?: boolean;
+  /** Never answer viewed_sync, to hold the panel in its loading state. */
+  holdSync?: boolean;
 }
 
-/** The plugin's RPC, answered from memory. */
-function fakeRpc(fixture: Fixture) {
-  let record = { ...fixture.record };
-  return async <Result,>(method: string, input: unknown): Promise<Result> => {
-    switch (method) {
-      case "filter_get":
-        return { onlyUnviewed: fixture.onlyUnviewed ?? false } as Result;
-      case "filter_set":
-        return { onlyUnviewed: (input as { onlyUnviewed: boolean }).onlyUnviewed } as Result;
-      case "viewed_marks":
-      case "viewed_prune":
-        return { record } as Result;
-      case "viewed_set": {
-        const { path, fingerprint, viewed } = input as {
-          path: string;
-          fingerprint: string;
-          viewed: boolean;
-        };
-        record = viewed
-          ? { ...record, [path]: fingerprint }
-          : Object.fromEntries(Object.entries(record).filter(([key]) => key !== path));
-        return { record, github: fixture.github } as Result;
-      }
-      case "viewed_list":
-        if (fixture.holdGithub) return new Promise<Result>(() => {});
-        return { record, github: fixture.github } as Result;
-      default:
-        return { ok: true } as Result;
-    }
+/** The plugin's RPC, answered from the marks bb shows. */
+function fakeRpc(fixture: Fixture, marks: () => ReadonlySet<string>) {
+  return async <Result,>(method: string): Promise<Result> => {
+    if (method !== "viewed_sync") return { ok: true } as Result;
+    if (fixture.holdSync) return new Promise<Result>(() => {});
+    const viewed = Object.fromEntries(
+      FILES.filter((file) => marks().has(file.path)).map((file) => [file.path, file.revision]),
+    );
+    const result: SyncResult = { viewed, github: fixture.github };
+    return result as Result;
   };
 }
 
 /** Starts the engine on this page, as the content script does in bb. */
-function useEngine(fixture: Fixture, threadId: string): void {
+function useEngine(fixture: Fixture, threadId: string, marks: () => ReadonlySet<string>): void {
   useEffect(() => {
     const style = document.createElement("style");
     style.textContent = STYLE_TEXT;
     document.head.append(style);
     const controller = new AbortController();
     const engine = startEngine({
-      rpc: fakeRpc(fixture),
+      rpc: fakeRpc(fixture, marks),
       signal: controller.signal,
       doc: document,
       pathname: () => `/threads/${threadId}`,
       defer: (run) => {
         const frame = window.requestAnimationFrame(run);
         return () => window.cancelAnimationFrame(frame);
+      },
+      delay: (run) => {
+        const timer = window.setTimeout(run, 400);
+        return () => window.clearTimeout(timer);
       },
       warn: (cause) => console.warn("[diff-viewed story]", cause),
     });
@@ -254,7 +240,7 @@ function useEngine(fixture: Fixture, threadId: string): void {
       engine.dispose();
       style.remove();
     };
-  }, [fixture, threadId]);
+  }, [fixture, threadId, marks]);
 }
 
 const PRESENTATION = {
@@ -263,13 +249,26 @@ const PRESENTATION = {
   showLineNumbers: true,
 } as const;
 
+const TARGET = { type: "all", mergeBaseBranch: "main" } as const;
+
 /**
  * Stands in for bb's DiffFilesPanel. The engine reads the whole file list
- * from the `files` prop of the component above the `[data-index]` rows, so
- * this one takes `files` and `target` the way bb's does.
+ * from the props of the component above the `[data-index]` rows, so this one
+ * takes `environmentId`, `target`, and `files` the way bb's does. As in bb, a
+ * file folds away when it is marked viewed.
  */
-function FileList({ files }: { files: DiffFileEntry[]; target: { type: string } }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+function FileList({
+  files,
+  marks,
+  onViewedChange,
+}: {
+  environmentId: string;
+  target: typeof TARGET;
+  files: DiffFileEntry[];
+  marks: ReadonlySet<string>;
+  onViewedChange: (path: string, viewed: boolean) => void;
+}) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
   return (
     <div className="relative w-full">
       {files.map((file, index) => (
@@ -277,9 +276,20 @@ function FileList({ files }: { files: DiffFileEntry[]; target: { type: string } 
           <DiffFileCard
             entry={file}
             presentation={PRESENTATION}
-            isCollapsed={collapsed.has(file.path)}
+            ignoreWhitespace={false}
+            isViewed={marks.has(file.path)}
+            isViewedDisabled={false}
+            onViewedChange={(viewed) => {
+              onViewedChange(file.path, viewed);
+              setOpen((previous) => {
+                const next = new Set(previous);
+                next.delete(file.path);
+                return next;
+              });
+            }}
+            isCollapsed={marks.has(file.path) && !open.has(file.path)}
             onToggleCollapsed={() =>
-              setCollapsed((previous) => {
+              setOpen((previous) => {
                 const next = new Set(previous);
                 if (next.has(file.path)) next.delete(file.path);
                 else next.add(file.path);
@@ -298,28 +308,16 @@ function FileList({ files }: { files: DiffFileEntry[]; target: { type: string } 
 
 const noop = () => {};
 
-function Panel({
-  fixture,
-  threadId,
-  files = FILES,
-  openRangeMenu = false,
-}: {
-  fixture: Fixture;
-  threadId: string;
-  files?: DiffFileEntry[];
-  openRangeMenu?: boolean;
-}) {
-  useEngine(fixture, threadId);
-  useEffect(() => {
-    if (!openRangeMenu) return;
-    // Radix opens the menu on pointerdown, as a click in bb would.
-    const trigger = document.querySelector('[data-testid="git-diff-toolbar-selector-slot"] button');
-    trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
-  }, [openRangeMenu]);
+function Panel({ fixture, threadId }: { fixture: Fixture; threadId: string }) {
+  const [marks, setMarks] = useState<ReadonlySet<string>>(() => new Set(fixture.viewed));
+  const marksRef = useRef(marks);
+  marksRef.current = marks;
+  const readMarks = useMemo(() => () => marksRef.current, []);
+  useEngine(fixture, threadId, readMarks);
   const stats = {
-    filesCount: files.length,
-    insertions: files.reduce((sum, file) => sum + file.additions, 0),
-    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+    filesCount: FILES.length,
+    insertions: FILES.reduce((sum, file) => sum + file.additions, 0),
+    deletions: FILES.reduce((sum, file) => sum + file.deletions, 0),
   };
   return (
     <div data-screenshot-frame className="flex w-[800px] min-w-0 flex-col overflow-hidden bg-background pt-3">
@@ -332,29 +330,52 @@ function Panel({
         onSelectionChange={noop}
         isSelectorDisabled={false}
         stats={stats}
+        isStatsLoading={false}
+        totalFilesCount={FILES.length}
         isTruncated={false}
+        fileFilter={null}
+        filters={DEFAULT_DIFF_FILE_FILTERS}
+        onFiltersChange={noop}
+        extensionCounts={[]}
+        onFileFilterChange={noop}
         areAllFilesCollapsed={false}
         isCollapseAllDisabled={false}
+        collapseAllDisabledReason={null}
         onToggleAllCollapsed={noop}
         displayMode="split"
         onDisplayModeChange={noop}
         lineOverflowMode={DEFAULT_CODE_OVERFLOW_MODE}
         onLineOverflowModeChange={noop}
+        ignoreWhitespace={false}
+        onIgnoreWhitespaceChange={noop}
       />
       <div className="px-4 pt-2 pb-3">
-        <FileList files={files} target={{ type: "all" }} />
+        <FileList
+          environmentId="env_story"
+          target={TARGET}
+          files={FILES}
+          marks={marks}
+          onViewedChange={(path, viewed) =>
+            setMarks((previous) => {
+              const next = new Set(previous);
+              if (viewed) next.add(path);
+              else next.delete(path);
+              return next;
+            })
+          }
+        />
       </div>
     </div>
   );
 }
 
 const VIEWED_FIXTURE: Fixture = {
-  record: {},
+  viewed: ["README.md", "src/cart.ts", "src/inventory.ts"],
   github: pull(["README.md", "src/cart.ts", "src/inventory.ts"]),
 };
 
 /**
- * Three files marked viewed fold away and dim, the unread file below them
+ * Three files checked Viewed in bb fold away, the unread file below them
  * stays open, and the toolbar counts 3/6 viewed. Every file here syncs with
  * the pull request, so none shows the Local icon.
  */
@@ -363,7 +384,7 @@ export function Viewed() {
 }
 
 const LOCAL_FIXTURE: Fixture = {
-  record: { "src/pricing.ts": "+12 -1" },
+  viewed: ["README.md", "src/cart.ts", "src/inventory.ts", "src/pricing.ts"],
   github: pull(["README.md", "src/cart.ts", "src/inventory.ts"], {
     "src/pricing.ts": [10, 1],
   }),
@@ -371,15 +392,15 @@ const LOCAL_FIXTURE: Fixture = {
 
 /**
  * src/pricing.ts has edits that are not pushed, so its diff here differs from
- * the pull request's. Its Viewed mark is Local, shown by the crossed-out cloud
- * before the checkbox, and stays in bb until a push makes the diffs match.
+ * the pull request's. Its mark is Local, shown by the crossed-out cloud after
+ * the checkbox, and stays in bb until a push makes the diffs match.
  */
 export function Local() {
   return <Panel fixture={LOCAL_FIXTURE} threadId="thr_local" />;
 }
 
 const NO_PULL_FIXTURE: Fixture = {
-  record: { "README.md": "+7 -0", "src/cart.ts": "+7 -2" },
+  viewed: ["README.md", "src/cart.ts"],
   github: null,
 };
 
@@ -392,29 +413,15 @@ export function NoPullRequest() {
 }
 
 const LOADING_FIXTURE: Fixture = {
-  record: { "README.md": "+7 -0", "src/cart.ts": "+7 -2" },
+  viewed: ["README.md", "src/cart.ts"],
   github: null,
-  holdGithub: true,
+  holdSync: true,
 };
 
 /**
- * While GitHub is still answering: bb's own marks show at once, a spinner
- * holds the Local icon's place, and the viewed count stays muted.
+ * While GitHub is still answering: bb's checkboxes show its marks at once, a
+ * spinner holds the Local icon's place, and the viewed count stays muted.
  */
 export function Loading() {
   return <Panel fixture={LOADING_FIXTURE} threadId="thr_loading" />;
-}
-
-const ONLY_UNVIEWED_FIXTURE: Fixture = {
-  record: {},
-  github: pull(["README.md", "src/cart.ts", "src/inventory.ts"]),
-  onlyUnviewed: true,
-};
-
-/**
- * Only unviewed, checked at the bottom of the range dropdown, hides the three
- * viewed files. The toolbar still counts 3/6 viewed.
- */
-export function OnlyUnviewed() {
-  return <Panel fixture={ONLY_UNVIEWED_FIXTURE} threadId="thr_only_unviewed" openRangeMenu />;
 }

@@ -116,13 +116,10 @@ you to do, except a snoozed one. That is one line, with its icons and the
 day it comes back ("Until Monday") at the right, and the chevron at its left
 opens it to the full row.
 
-The sidebar count is requests with no thread that are not drafts or snoozed. Before it, a red circle counts the ones waiting too long, as Now
-counts its urgent rows.
-
-The same counts sit at the top left of bb's window on every page, just after
-the sidebar toggle, after the Reviews eye. Clicking them opens the list, and they are
-shaded while it is open. They read the stored list the sidebar reads, so they
-add no GitHub calls. With nothing to review, only the icon shows.
+The Reviews icon in bb's navigation carries a red badge counting the
+requests waiting too long that have no thread and are not drafts or snoozed,
+as Now counts its urgent rows. With none, there is no badge. It reads the
+stored list the page reads, so it adds no GitHub calls.
 
 ## Each row
 

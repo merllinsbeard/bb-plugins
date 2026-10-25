@@ -157,16 +157,21 @@ export function parseAddedItemId(raw: string): string | null {
 export class BoardUnavailableError extends Error {}
 
 /**
- * Resolves the board and its Status field. Two calls, both cheap, and the
- * caller is expected to cache the result: a board's id and columns change far
- * less often than its contents.
+ * Resolves each listed board the owner has, with its Status field, in the
+ * list's order. One call lists the owner's projects, then one more per board
+ * found. The caller is expected to cache the result: a board's id and columns
+ * change far less often than its contents.
+ *
+ * A listed name the owner does not have is skipped, because the list spans
+ * owners: an org's board and someone's personal one, each missing from the
+ * other's projects. Throws only when the owner has none of them.
  */
-export async function fetchBoardProject(
+export async function fetchBoardProjects(
   gh: GhRunner,
   owner: string,
-  board: string,
-): Promise<BoardProject> {
-  if (board.trim() === "") {
+  boards: readonly string[],
+): Promise<BoardProject[]> {
+  if (boards.length === 0) {
     throw new BoardUnavailableError(
       "No project board is configured, so there is no board to place issues on.",
     );
@@ -177,20 +182,29 @@ export async function fetchBoardProject(
     "--owner", owner,
     "--format", "json",
   ]);
-  const project = parseProjectList(listed, board);
-  if (!project) {
-    throw new BoardUnavailableError(`${owner} has no project board named "${board}".`);
+  const found: BoardProject[] = [];
+  for (const board of boards) {
+    const project = parseProjectList(listed, board);
+    if (project && !found.some((existing) => existing.id === project.id)) found.push(project);
+  }
+  if (found.length === 0) {
+    const names = boards.map((board) => `"${board}"`).join(" or ");
+    throw new BoardUnavailableError(`${owner} has no project board named ${names}.`);
   }
 
-  const fields = await gh.run([
-    "project", "field-list", String(project.number),
-    "--owner", owner,
-    "--format", "json",
-  ]);
-  const status = parseStatusField(fields);
-  if (!status) return project;
-
-  return { ...project, statusFieldId: status.id, statusOptions: status.options };
+  const resolved: BoardProject[] = [];
+  for (const project of found) {
+    const fields = await gh.run([
+      "project", "field-list", String(project.number),
+      "--owner", owner,
+      "--format", "json",
+    ]);
+    const status = parseStatusField(fields);
+    resolved.push(
+      status ? { ...project, statusFieldId: status.id, statusOptions: status.options } : project,
+    );
+  }
+  return resolved;
 }
 
 /** The owner half of an `owner/name` slug, which is who owns the board. */

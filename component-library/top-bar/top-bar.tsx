@@ -26,6 +26,31 @@ export const RIGHT_PANEL_TOGGLE = 'button[aria-label^="Show right panel"], butto
 /** The row of buttons at the right of a page's header, for a page with no right panel, such as a plugin's. */
 export const HEADER_ACTIONS = "[data-app-page-header-actions]";
 
+/** The spacer as wide as bb's sidebar column: the rail and, while it is open, the panel. */
+export const SIDEBAR_GAP = '[data-sidebar="gap"]';
+
+/** The space `alignEnd` keeps between the slot and the sidebar column's right edge, in pixels. */
+const END_INSET = 8;
+
+/**
+ * The left margin that puts a slot's right edge `END_INSET` short of the
+ * sidebar column's right edge, from where the slot sits now. Zero when the
+ * slot would not fit, as on the rail alone, so it stays beside the toggle.
+ */
+export function endMargin({ columnRight, slotRight, margin }: { columnRight: number; slotRight: number; margin: number }): number {
+  return Math.max(0, columnRight - END_INSET - (slotRight - margin));
+}
+
+/**
+ * The width a slot has from where it starts beside the toggle to
+ * `END_INSET` short of the sidebar column's right edge. It does not depend
+ * on the slot's own width, so a slot can draw less when it is short of room
+ * without that changing the answer. Negative when the sidebar is closed.
+ */
+export function roomToEnd({ columnRight, slotLeft, margin }: { columnRight: number; slotLeft: number; margin: number }): number {
+  return columnRight - END_INSET - (slotLeft - margin);
+}
+
 /** Every plugin's slot element, so slots can line up beside each other. */
 const SLOT = "[data-top-bar-slot]";
 
@@ -84,6 +109,19 @@ export function onPath(pathname: string, prefixes: readonly string[]): boolean {
 /** Whether the open page is one the slot's button opens, so the button can show as current. */
 const ActiveContext = createContext(false);
 
+/** The slot's `roomToEnd`, for a slot with `alignEnd` in the desktop title bar; null anywhere else. */
+const RoomContext = createContext<number | null>(null);
+
+/**
+ * How many pixels a slot with `alignEnd` has before the sidebar column's
+ * right edge, so it can draw a narrower form when the sidebar is too narrow
+ * for the full one. Null outside the desktop title bar, where the slot has
+ * no edge to keep to.
+ */
+export function useTopBarRoom(): number | null {
+  return useContext(RoomContext);
+}
+
 /**
  * Puts `children` at the top left of bb's window, just after the sidebar
  * toggle in the desktop app's title bar, or before the page's title in a
@@ -92,7 +130,7 @@ const ActiveContext = createContext(false);
  * watching the document, and draws nothing on a page with neither. Under a
  * path in `activeOn`, the `TopBarCount` inside shows as the current page.
  */
-export function TopBarSlot({ pluginId, order = 0, activeOn = [], children }: {
+export function TopBarSlot({ pluginId, order = 0, activeOn = [], alignEnd = false, children }: {
   /**
    * The plugin's id. bb scopes a plugin's stylesheet to elements under
    * `data-bb-plugin="<id>"`, and the slot sits in bb's own header, outside the
@@ -103,10 +141,16 @@ export function TopBarSlot({ pluginId, order = 0, activeOn = [], children }: {
   order?: number;
   /** Path prefixes of the page the button opens, such as `/plugins/now/now`. */
   activeOn?: readonly string[];
+  /**
+   * In the desktop title bar, push the slot to the right edge of the sidebar
+   * column while the sidebar is open, rather than beside the toggle.
+   */
+  alignEnd?: boolean;
   children: ReactNode;
 }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
   const [active, setActive] = useState(false);
+  const [room, setRoom] = useState<number | null>(null);
 
   useEffect(() => {
     const el = document.createElement("span");
@@ -116,9 +160,37 @@ export function TopBarSlot({ pluginId, order = 0, activeOn = [], children }: {
     // The top bar is a window-drag region in bb's desktop app; this keeps the chip clickable.
     el.style.setProperty("-webkit-app-region", "no-drag");
     el.style.setProperty("app-region", "no-drag");
+    // bb's title bar takes no pointer events, and turns them back on only around its own buttons.
+    el.style.pointerEvents = "auto";
     el.style.display = "inline-flex";
     el.style.alignItems = "center";
     el.style.verticalAlign = "top";
+
+    // The gap's width follows the sidebar as it opens, closes, or is dragged wider. A
+    // ResizeObserver reads the layout after it has settled, and the margin it sets
+    // changes neither the gap's size nor the slot's.
+    let gap: Element | null = null;
+    const align = () => {
+      const column = gap?.getBoundingClientRect();
+      const margin = parseFloat(el.style.marginLeft) || 0;
+      if (!column || !el.parentElement?.matches(TITLE_BAR)) {
+        if (margin !== 0) el.style.marginLeft = "";
+        setRoom(null);
+        return;
+      }
+      const slot = el.getBoundingClientRect();
+      const next = endMargin({ columnRight: column.right, slotRight: slot.right, margin });
+      if (next !== margin) el.style.marginLeft = next === 0 ? "" : `${next}px`;
+      setRoom(Math.round(roomToEnd({ columnRight: column.right, slotLeft: slot.left, margin })));
+    };
+    const resize = alignEnd && typeof ResizeObserver !== "undefined" ? new ResizeObserver(align) : null;
+    const watchGap = () => {
+      const found = document.querySelector(SIDEBAR_GAP);
+      if (found === gap) return;
+      if (gap) resize?.unobserve(gap);
+      gap = found;
+      if (gap) resize?.observe(gap);
+    };
 
     let frame = 0;
     const place = () => {
@@ -146,6 +218,11 @@ export function TopBarSlot({ pluginId, order = 0, activeOn = [], children }: {
         if (transform !== "none" && transform !== "") break;
       }
       el.style.transform = transform === "none" ? "" : transform;
+      if (resize) {
+        watchGap();
+        // Moving into the title bar resizes nothing, so the observer would not fire.
+        align();
+      }
       setHost(el);
     };
     const schedule = () => {
@@ -156,15 +233,24 @@ export function TopBarSlot({ pluginId, order = 0, activeOn = [], children }: {
     const observer = new MutationObserver(schedule);
     observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("popstate", schedule);
+    resize?.observe(el);
     return () => {
+      resize?.disconnect();
       observer.disconnect();
       window.removeEventListener("popstate", schedule);
       if (frame !== 0) cancelAnimationFrame(frame);
       el.remove();
     };
-  }, [pluginId, order, activeOn.join("\n")]);
+  }, [pluginId, order, alignEnd, activeOn.join("\n")]);
 
-  return host === null ? null : createPortal(<ActiveContext.Provider value={active}>{children}</ActiveContext.Provider>, host);
+  return host === null
+    ? null
+    : createPortal(
+        <ActiveContext.Provider value={active}>
+          <RoomContext.Provider value={room}>{children}</RoomContext.Provider>
+        </ActiveContext.Provider>,
+        host,
+      );
 }
 
 const CHIP =

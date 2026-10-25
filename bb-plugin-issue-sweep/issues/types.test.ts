@@ -37,6 +37,7 @@ describe("toRow", () => {
       parent: null,
       boardStatus: null,
       onBoard: false,
+      board: null,
     });
   });
 

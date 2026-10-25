@@ -9,6 +9,7 @@ import {
   parseStatus,
   pickManifest,
   serviceCommands,
+  servicesToStop,
   tail,
   type Manifest,
   type ManifestSource,
@@ -149,6 +150,38 @@ export default async function plugin(bb: BbPluginApi) {
     }
     return null;
   }
+
+  /** Environments whose services are being stopped, so a cascade archive stops them once. */
+  const stopping = new Set<string>();
+
+  /**
+   * Stops the checkout's running services once its last live thread is
+   * archived. Threads still working in the checkout may be using them, so
+   * archiving one of several leaves them running.
+   */
+  async function stopOnArchive(thread: { id: string; environmentId?: string | null }): Promise<void> {
+    const environmentId = thread.environmentId;
+    if (!environmentId || stopping.has(environmentId)) return;
+    stopping.add(environmentId);
+    try {
+      const live = await bb.sdk.threads.list({ environmentId, archived: false, includeHidden: true, limit: 1 });
+      if (live.length > 0) return;
+      const current = await strip(thread.id);
+      if (current.kind !== "services" || current.failure) return;
+      for (const id of servicesToStop(current.services)) {
+        const failure = await run(thread.id, { kind: "service", verb: "stop", id });
+        if (failure) bb.log.warn(`stop ${id} after archiving ${thread.id} failed: ${failure.output}`);
+      }
+    } finally {
+      stopping.delete(environmentId);
+    }
+  }
+
+  bb.events.on("thread.archived", async ({ thread }) => {
+    await stopOnArchive(thread).catch((error) =>
+      bb.log.warn(`stopping services after archiving ${thread.id} failed: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  });
 
   bb.rpc.register(rpcContract, {
     strip: ({ threadId }) => strip(threadId),

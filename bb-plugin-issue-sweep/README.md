@@ -4,12 +4,6 @@ A bb sidebar panel listing every open GitHub issue assigned to you, across all
 repositories, in two columns: what needs you, and everything else grouped by
 board status.
 
-The sidebar entry counts the issues in the "Statuses counted in the
-sidebar". The same count sits at the top left of bb's window on every page,
-just after the sidebar toggle, after the Issues icon. Clicking it opens the list, and it is
-shaded while the list is open. It reads the stored list the sidebar reads, so
-it adds no GitHub calls. With nothing counted, only the icon shows.
-
 The sweep is deterministic: it runs `gh`, parses the result with pure functions,
 and spends no model tokens. No agent is involved at any point.
 
@@ -61,7 +55,7 @@ them all.
   yours is never new, and neither is anything before it, since you read the
   thread to reply. The first sweep to see an issue records its count, so
   nothing is new on the first sync.
-- **Stale**: in one of the "Statuses counted in the sidebar", not blocked, not
+- **Stale**: in one of the "Statuses that are on you", not blocked, not
   a parent, and not updated for "Stale after (days)". Flagged in red. A parent
   is never stale, because its sub-issues are the work. A board move does not
   change the issue's updated time on GitHub, so the plugin counts the moves it
@@ -110,10 +104,10 @@ count and the sub-issue or task progress bar are at the end of the action
 line instead, the bar first. A sub-issue shows its parent as a chip at the end of its title. The
 repository joins the line only when more than one is in play.
 
-An open row has a button for each of the "Board stages, in order", with the
-current stage filled. Pressing a stage moves the issue to it on the board,
-adding the issue to the board first if it is not on it. The last segment opens
-a menu of every status the board has, and names the status when it is not a
+An open row has a button for each of the "Board stages, in order" that its
+board has, with the current stage filled. Pressing a stage moves the issue to
+it on the board, adding the issue to the board first if it is not on it. The
+last segment opens a menu of every status the board has, and names the status when it is not a
 stage: "Stalled", say, "No status", or "Not on board". In the left column the
 buttons sit beside the title, with no label saying why the issue needs you:
 the squares above the column name each run. In the narrower right column the
@@ -131,10 +125,12 @@ thread reads "No project here" and is disabled when no bb project is checked
 out for the repository.
 
 Clicking the comment count opens the issue's latest comments in a drawer under
-the action line, oldest first, with the ones that are new marked in blue. Each
-comment shows in full and opens on GitHub. The drawer reads
-the latest 50, and when the issue has more, the link at the bottom says how many
-there are in all. Opening the drawer makes one GitHub GraphQL request for that
+the action line, oldest first, with the ones that are new marked in blue, and
+yours and bots' labelled "you" and "bot". Each comment is drawn as the Markdown
+it was written in, cut at three lines with Show more under it, and its author
+line opens it on GitHub. The drawer reads the latest 50 and shows the newest
+10, with the rest behind "Show N earlier", and when the issue has more than 50,
+the link at the bottom says how many there are in all. Opening the drawer makes one GitHub GraphQL request for that
 issue, and none is made until you click; once it has read the comments, the
 row's "N new" clears. Clicking the count again closes it.
 
@@ -183,13 +179,22 @@ starts it over. The measured span runs through the comment-author reads, the boa
 - **Also sweep these repositories** — comma or newline separated `owner/name`,
   for a repository worth watching without a checkout here. Ignored when the
   filter is off.
-- **Project board** — the board whose status each issue is read from. Blank
-  takes the first status found on any board.
+- **Project boards** — the boards each issue's status is read from, separated
+  by commas, such as `Team Board, Personal`. An issue on more than one reads
+  the first one listed, even when it has no status there. A row on none of
+  them is added to the first board listed that its repository's owner has. A
+  row on a listed board its owner does not have, such as an org's issue on a
+  personal board, shows its status but cannot be moved from here. Blank reads
+  the status from any board and offers no moves. Resolving the boards costs
+  one `gh project list` per repository owner and one `gh project field-list`
+  per board found, once per reload or change to this setting.
 - **Board stages, in order** — the stage buttons on each open row, and the
   order of the status groups in the right column, drawn furthest along first. Default
-  `Backlog,Ready,In Progress,In Review`.
-- **Statuses counted in the sidebar** — the statuses the sidebar count and "to
-  start" are made of. Default `In Progress,Ready`.
+  `Backlog,Ready,In Progress,In Review`. With boards whose columns differ,
+  list them all, such as `Backlog,Todo,Ready,In Progress,In Review`, and each
+  row shows only the ones its own board has.
+- **Statuses that are on you** — the statuses "to start" and stale are made
+  of. Default `In Progress,Ready`.
 - **Stale after (days)** — how long a counted issue can go without an update
   before it is flagged stale. Default 7; anything but a positive whole number
   is read as 7.

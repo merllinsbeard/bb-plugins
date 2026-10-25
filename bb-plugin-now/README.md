@@ -6,17 +6,14 @@ Gmail inbox.
 
 ## What it adds
 
-A **Now** page in the left sidebar, whose entry shows three counts: the
-Urgent run described below in red, the Today run (tasks due today whose
-time has not passed) in amber, joined into one pill when both are above zero,
-and then how many rows are in the Now section, the same number as its tab,
-which includes the other two. Each is left out at zero. The same counts sit
-at the top left of bb's window on every page, after Now's icon, just after
-the sidebar toggle. Clicking them opens Now, and they are shaded while Now is open. bb has no plugin slot there, so the
-plugin finds the sidebar toggle in the page and draws beside it; if a bb
-update changes the page, the counts leave the top bar and stay in the sidebar.
-They read the stored list the sidebar reads, so they add no calls to
-Todoist, Gmail, Calendar, or GitHub. It loads every
+A **Now** page in the left sidebar, whose icon carries a badge: the Urgent
+run described below as a red count, or, when nothing is urgent, the Today
+run (tasks due today whose time has not passed) as an amber one. Its tooltip
+names both. With neither, there is no badge. It reads the stored list the
+page reads, so it adds no calls to Todoist, Gmail, Calendar, or GitHub. The
+red is the same as the counts on the page; bb draws its own badges in a
+darker red, so the plugin adds a style rule that recolors every red badge in
+bb's navigation. It loads every
 configured source at once and merges their items into one list. The header
 has the sections on the left (**Now**, **Anytime**) and the sources
 on the right (**Gmail**, **Todoist**; hover one for its query), each with its
@@ -544,7 +541,7 @@ list `server.ts` passes to `loadSources`.
 | `email-reader.stories.tsx` | The Email tab beside the list, for `npm run storybook` at the root |
 | `priorities.stories.tsx` | The Priorities column and its wide, narrow, and empty layouts, for `npm run storybook` at the root |
 | `server.ts` | The settings, the sync (shared between callers), the background service, and the RPC handlers |
-| `app.tsx` | The sidebar page, its title-bar sync control, its Email tab, and its counts in bb's top bar, which read the stored list and sync on open |
+| `app.tsx` | The sidebar page, its title-bar sync control, its Email tab, and its navigation badge, which read the stored list and sync on open |
 
 ## Working on it
 

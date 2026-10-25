@@ -7,7 +7,8 @@ import { makeExecutionControlsProps, STORY_CLAUDE_CODE_MODELS, STORY_PROVIDER_OP
 import { AppPageHeader } from "@bb-app/components/layout/AppPageHeader";
 import { SidebarProvider } from "@bb-app/components/ui/sidebar";
 import { FollowUpPromptBox } from "@bb-app/components/promptbox/FollowUpPromptBox";
-import { INERT_TYPEAHEAD_COMMAND_CONFIG } from "@bb-app/components/promptbox/PromptBoxInternal";
+import "@bb-ladle/composer-plugin";
+import { makeTypeaheadConfig } from "@bb-ladle/story-fixtures";
 import type { PickerOption } from "@bb-app/components/pickers/OptionPicker";
 
 import type { ContextMeterProps } from "./components/context-meter";
@@ -322,9 +323,6 @@ export const METER: ContextMeterProps = {
   onCompact: () => undefined,
 };
 export const noop = () => {};
-// bb's own empty mention list. Bare @bb/* packages do not resolve from a
-// plugin's stories, only the @bb-app and @bb-ladle aliases do.
-export const EMPTY_ORDERED_MENTION_SUGGESTIONS = { groups: [], suggestions: [] };
 export const PERMISSION_OPTIONS: readonly PickerOption<PermissionMode>[] = [
   { value: "accept-edits", label: "Accept Edits" },
   { value: "auto", label: "Approve for me" },
@@ -424,10 +422,7 @@ export function ThreadFrame({
           execution={EXECUTION}
           permission={{ value: "full", options: PERMISSION_OPTIONS, onChange: noop, supported: true }}
           promptActions={[]}
-          typeahead={{
-            mention: { results: EMPTY_ORDERED_MENTION_SUGGESTIONS, isLoading: false, isError: false, onQueryChange: noop },
-            command: INERT_TYPEAHEAD_COMMAND_CONFIG,
-          }}
+          typeahead={makeTypeaheadConfig()}
           collapseResetKey="thr_story"
         />
       </div>

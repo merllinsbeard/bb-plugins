@@ -6,7 +6,8 @@ import { useState, type ReactNode } from "react";
 import type { PermissionMode, PromptTextMention, WorkspaceStatus } from "@bb/domain";
 import { Markdown } from "@get-bb/plugin-sdk/app";
 import { FollowUpPromptBox } from "@bb-app/components/promptbox/FollowUpPromptBox";
-import { INERT_TYPEAHEAD_COMMAND_CONFIG } from "@bb-app/components/promptbox/PromptBoxInternal";
+import "@bb-ladle/composer-plugin";
+import { makeTypeaheadConfig } from "@bb-ladle/story-fixtures";
 import { PromptStackCard } from "@bb-app/components/promptbox/banner/PromptStackCard";
 import { ThreadPromptContextBanner } from "@bb-app/components/promptbox/banner/ThreadPromptContextBanner";
 import { selectWorkspaceChangedFilesSection } from "@bb-app/components/workspace/workspace-change-summary";
@@ -32,9 +33,6 @@ export default {
 };
 
 const noop = () => {};
-// bb's own empty mention list. Bare @bb/* packages do not resolve from a
-// plugin's stories, only the @bb-app and @bb-ladle aliases do.
-const EMPTY_ORDERED_MENTION_SUGGESTIONS = { groups: [], suggestions: [] };
 
 /* -------------------------------------------------------------------------- */
 /* The thread around the banner                                               */
@@ -260,10 +258,7 @@ function ThreadStage({
           execution={execution}
           permission={{ value: "full", options: permissionOptions, onChange: noop, supported: true }}
           promptActions={[]}
-          typeahead={{
-            mention: { results: EMPTY_ORDERED_MENTION_SUGGESTIONS, isLoading: false, isError: false, onQueryChange: noop },
-            command: INERT_TYPEAHEAD_COMMAND_CONFIG,
-          }}
+          typeahead={makeTypeaheadConfig()}
           collapseResetKey="thr_story"
         />
       </div>

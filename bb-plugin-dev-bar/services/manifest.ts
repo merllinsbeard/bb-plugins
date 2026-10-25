@@ -166,3 +166,10 @@ export function serviceCommands(manifest: Manifest, verb: ServiceVerb, id: strin
 export function tail(text: string, lines = 6): string {
   return text.trimEnd().split("\n").slice(-lines).join("\n");
 }
+
+/** The services to stop when a checkout's last thread is archived: those running or starting that can be stopped. */
+export function servicesToStop(services: Service[]): string[] {
+  return services
+    .filter((service) => (service.state === "running" || service.state === "starting") && service.verbs.includes("stop"))
+    .map((service) => service.id);
+}

@@ -3,140 +3,78 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
-import plugin, { VIEWED_CHANGED } from "./server";
+import plugin from "./server";
+import type { DiffFileEntry, DiffTarget } from "./viewed/marks";
 
-/** A host with GitHub sync off, so marks are local as they always were. */
-async function start() {
-  const host = createFakePluginHost({
-    pluginId: "diff-viewed",
-    settings: { syncGithub: "off" },
-  });
-  await plugin(host.bb);
-  return host;
-}
-
-const A = { threadId: "thr_a", path: "src/a.ts", fingerprint: "+8 -4" };
-
-describe("viewed_set", () => {
-  it("persists a mark and hands back the new record", async () => {
-    const { harness } = await start();
-
-    const set = await harness.behavior.callRpc("viewed_set", {
-      ...A,
-      viewed: true,
-    });
-    expect(set).toEqual({ record: { "src/a.ts": "+8 -4" }, github: null });
-
-    const listed = await harness.behavior.callRpc("viewed_list", {
-      threadId: "thr_a",
-    });
-    expect(listed).toEqual({ record: { "src/a.ts": "+8 -4" }, github: null });
-  });
-
-  it("clears a mark", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-
-    const cleared = await harness.behavior.callRpc("viewed_set", {
-      ...A,
-      viewed: false,
-    });
-    expect(cleared).toEqual({ record: {}, github: null });
-  });
-
-  it("keeps marks in separate threads apart", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-
-    const other = await harness.behavior.callRpc("viewed_list", {
-      threadId: "thr_b",
-    });
-    expect(other).toEqual({ record: {}, github: null });
-  });
-
-  it("publishes so another window can refetch", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-
-    expect(harness.inspection.realtimeSignals).toEqual([
-      { channel: VIEWED_CHANGED, payload: { threadId: "thr_a" } },
-    ]);
-  });
-
-  it("does not write or publish when the mark is already what was asked for", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    const before = harness.inspection.realtimeSignals.length;
-
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(harness.inspection.realtimeSignals).toHaveLength(before);
-  });
-
-  it("rejects an empty thread id at the wire boundary", async () => {
-    const { harness } = await start();
-    await expect(
-      harness.behavior.callRpc("viewed_set", { ...A, threadId: "", viewed: true }),
-    ).rejects.toThrow();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
-describe("viewed_prune", () => {
-  it("drops marks for files that left the diff", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    await harness.behavior.callRpc("viewed_set", {
-      ...A,
-      path: "src/b.ts",
-      viewed: true,
-    });
+const ALL: DiffTarget = { type: "all", mergeBaseBranch: "main" };
 
-    const pruned = await harness.behavior.callRpc("viewed_prune", {
-      threadId: "thr_a",
-      presentPaths: ["src/a.ts"],
-    });
-    expect(pruned).toEqual({ record: { "src/a.ts": "+8 -4" } });
-  });
-
-  it("is a no-op when every mark is still present", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    const before = harness.inspection.realtimeSignals.length;
-
-    await harness.behavior.callRpc("viewed_prune", {
-      threadId: "thr_a",
-      presentPaths: ["src/a.ts", "src/b.ts"],
-    });
-    expect(harness.inspection.realtimeSignals).toHaveLength(before);
-  });
+const entry = (path: string, additions = 8, deletions = 4, revision = `rev-${path}`): DiffFileEntry => ({
+  path,
+  previousPath: null,
+  changeKind: "modified",
+  additions,
+  deletions,
+  binary: false,
+  revision,
 });
 
-describe("filter", () => {
-  it("starts off showing every file", async () => {
-    const { harness } = await start();
-    expect(await harness.behavior.callRpc("filter_get", null)).toEqual({
-      onlyUnviewed: false,
-    });
-  });
+const A = entry("src/a.ts");
+const B = entry("src/b.ts", 1, 0);
 
-  it("remembers Only unviewed", async () => {
-    const { harness } = await start();
-    await harness.behavior.callRpc("filter_set", { onlyUnviewed: true });
-    expect(await harness.behavior.callRpc("filter_get", null)).toEqual({
-      onlyUnviewed: true,
+/**
+ * bb's own Viewed marks for one environment, keyed by range and path, with
+ * the calls the plugin made to change them.
+ */
+function fakeMarks() {
+  const marks = new Map<string, string>();
+  const writes: string[] = [];
+  const key = (target: string, path: string) => `${target}|${path}`;
+  const queryKey = (query: { target: string; mergeBaseBranch?: string; sha?: string }) =>
+    `${query.target}:${query.mergeBaseBranch ?? query.sha ?? ""}`;
+  const targetKey = (target: DiffTarget) =>
+    queryKey({
+      target: target.type,
+      ...("mergeBaseBranch" in target ? { mergeBaseBranch: target.mergeBaseBranch } : {}),
+      ...("sha" in target ? { sha: target.sha } : {}),
     });
-  });
-});
-
-describe("problem_report", () => {
-  it("accepts a problem from the content script", async () => {
-    const { harness } = await start();
-    expect(
-      await harness.behavior.callRpc("problem_report", {
-        message: "Could not read the changes panel's file list",
+  return {
+    marks,
+    writes,
+    set(path: string, revision: string, target: DiffTarget = ALL) {
+      marks.set(key(targetKey(target), path), revision);
+    },
+    get(path: string, target: DiffTarget = ALL) {
+      return marks.get(key(targetKey(target), path));
+    },
+    environments: {
+      experimental_diffViewed: async (args: {
+        target: string;
+        mergeBaseBranch?: string;
+        sha?: string;
+        paths: string[];
+      }) => ({
+        files: args.paths.flatMap((path) => {
+          const revision = marks.get(key(queryKey(args), path));
+          return revision === undefined ? [] : [{ path, revision }];
+        }),
       }),
-    ).toEqual({ ok: true });
-  });
-});
+      experimental_markDiffViewed: async (args: { target: DiffTarget; path: string; revision: string }) => {
+        writes.push(`mark ${args.path}`);
+        marks.set(key(targetKey(args.target), args.path), args.revision);
+        return { ok: true };
+      },
+      experimental_clearDiffViewed: async (args: { target: DiffTarget; path: string }) => {
+        writes.push(`clear ${args.path}`);
+        marks.delete(key(targetKey(args.target), args.path));
+        return { ok: true };
+      },
+    },
+  };
+}
 
 type FakeFile = { path: string; additions: number; deletions: number; viewerViewedState: string };
 
@@ -186,225 +124,218 @@ process.stdout.write(query.includes("mutation") ? "{}" : fs.readFileSync(${JSON.
   return { path: script, calls, setFiles };
 }
 
-async function startSynced(gh: { path: string }, pullRequest: boolean | { open: boolean } = true) {
-  const pr = typeof pullRequest === "boolean" ? { open: pullRequest } : pullRequest;
+/** The mutations sent to GitHub, as `mark <path>` or `unmark <path>`. */
+const mutations = (calls: string[][]) =>
+  calls
+    .filter((args) => args.some((arg) => arg.includes("mutation")))
+    .map((args) => {
+      const verb = args.some((arg) => arg.includes("unmarkFileAsViewed")) ? "unmark" : "mark";
+      const path = args.find((arg) => arg.startsWith("path="))?.slice("path=".length);
+      return `${verb} ${path}`;
+    });
+
+async function start(
+  options: {
+    marks?: ReturnType<typeof fakeMarks>;
+    gh?: { path: string };
+    /** Whether the environment has an open pull request. */
+    pullRequest?: boolean;
+    syncGithub?: "on" | "off";
+  } = {},
+) {
+  const marks = options.marks ?? fakeMarks();
+  const gh = options.gh ?? fakeGh([]);
   const host = createFakePluginHost({
     pluginId: "diff-viewed",
-    settings: { syncGithub: "on", ghPath: gh.path },
+    settings: { syncGithub: options.syncGithub ?? "on", ghPath: gh.path },
     sdk: {
       threads: {
         get: async () => makeThreadResponse({ id: "thr_a", environmentId: "env_a" }),
       },
-      environments: {
-        pullRequest: async () =>
-          pr.open
-            ? {
-                outcome: "available",
-                pullRequest: {
-                  number: 42,
-                  title: "Polish the widgets",
-                  url: "https://github.com/acme/widgets/pull/42",
-                  state: "open",
-                  baseRefName: "main",
-                  headRefName: "bb/polish",
-                  updatedAt: "2026-10-01T10:00:00Z",
-                  attention: "none",
-                  checks: null,
-                  review: { state: "none", reviewRequestCount: 0 },
-                  mergeability: { state: "mergeable", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" },
-                },
-              }
-            : { outcome: "absent" },
+      environments: marks.environments,
+      plugins: {
+        callRpc: async (args: { pluginId: string; method: string; input: { keys: string[] } }) => {
+          expect(args).toMatchObject({ pluginId: "bb--github-pr-status", method: "pullRequests" });
+          return Object.fromEntries(
+            args.input.keys.map((key) => [
+              key,
+              options.pullRequest === false
+                ? { outcome: "absent" }
+                : {
+                    outcome: "available",
+                    pullRequest: {
+                      number: 42,
+                      state: "open",
+                      url: "https://github.com/acme/widgets/pull/42",
+                    },
+                  },
+            ]),
+          );
+        },
       },
     } as never,
   });
   await plugin(host.bb);
-  return host;
+  return { ...host, marks, sync: (files: DiffFileEntry[], target: DiffTarget = ALL) =>
+    host.harness.behavior.callRpc("viewed_sync", { threadId: "thr_a", target, files }) };
 }
 
-const mutations = (calls: string[][]) =>
-  calls.filter((args) => args.some((arg) => arg.includes("mutation")));
+describe("viewed_sync without GitHub", () => {
+  it("returns bb's marks for the range", async () => {
+    const marks = fakeMarks();
+    marks.set("src/a.ts", A.revision);
+    marks.set("src/b.ts", "rev-other", { type: "uncommitted" });
+    const { sync } = await start({ marks, syncGithub: "off" });
+    expect(await sync([A, B])).toEqual({ viewed: { "src/a.ts": A.revision }, github: null });
+  });
 
-describe("GitHub sync", () => {
+  it("returns no pull request when the environment has none", async () => {
+    const gh = fakeGh([]);
+    const { sync } = await start({ gh, pullRequest: false });
+    expect(await sync([A])).toEqual({ viewed: {}, github: null });
+    expect(gh.calls()).toEqual([]);
+  });
+
+  it("reads a long diff in batches bb accepts", async () => {
+    const marks = fakeMarks();
+    const files = Array.from({ length: 1200 }, (_, index) => entry(`f${index}.ts`));
+    for (const file of files) marks.set(file.path, file.revision);
+    const { sync } = await start({ marks, syncGithub: "off" });
+    const result = (await sync(files)) as { viewed: Record<string, string> };
+    expect(Object.keys(result.viewed)).toHaveLength(1200);
+  });
+
+  it("rejects an empty thread id at the wire boundary", async () => {
+    const { harness } = await start({ syncGithub: "off" });
+    await expect(
+      harness.behavior.callRpc("viewed_sync", { threadId: "", target: ALL, files: [] }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("moving the marks this plugin kept before bb had its own", () => {
+  it("marks them in bb once, then forgets them", async () => {
+    const { sync, marks, bb } = await start({ syncGithub: "off" });
+    await bb.storage.kv.set("viewed:thr_a", { "src/a.ts": "+8 -4", "src/b.ts": "+9 -9" });
+    await bb.storage.kv.set("pending:thr_a", ["src/a.ts"]);
+
+    expect(await sync([A, B])).toEqual({ viewed: { "src/a.ts": A.revision }, github: null });
+    expect(marks.writes).toEqual(["mark src/a.ts"]);
+    expect(await bb.storage.kv.get("viewed:thr_a")).toBeUndefined();
+    expect(await bb.storage.kv.get("pending:thr_a")).toBeUndefined();
+
+    marks.marks.clear();
+    await sync([A, B]);
+    expect(marks.writes).toEqual(["mark src/a.ts"]);
+  });
+
+  it("waits for the All changes range", async () => {
+    const started = await start({ syncGithub: "off" });
+    await started.bb.storage.kv.set("viewed:thr_a", { "src/a.ts": "+8 -4" });
+    await started.sync([A], { type: "uncommitted" });
+    expect(started.marks.writes).toEqual([]);
+    expect(await started.bb.storage.kv.get("viewed:thr_a")).toBeDefined();
+  });
+});
+
+describe("viewed_sync with GitHub", () => {
   it("lists the pull request's files with the viewer's Viewed state", async () => {
     const gh = fakeGh([
-      { path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" },
+      { path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" },
       { path: "src/b.ts", additions: 1, deletions: 0, viewerViewedState: "DISMISSED" },
     ]);
-    const { harness } = await startSynced(gh);
-
-    const listed = await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(listed).toEqual({
-      record: {},
+    const { sync } = await start({ gh });
+    expect(await sync([A, B])).toEqual({
+      viewed: {},
       github: {
         number: 42,
         url: "https://github.com/acme/widgets/pull/42",
         files: [
-          { path: "src/a.ts", additions: 8, deletions: 4, viewed: true },
+          { path: "src/a.ts", additions: 8, deletions: 4, viewed: false },
           { path: "src/b.ts", additions: 1, deletions: 0, viewed: false },
         ],
       },
     });
   });
 
+  it("brings a file viewed on GitHub into bb", async () => {
+    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" }]);
+    const { sync, marks } = await start({ gh });
+    const result = await sync([A]);
+    expect(result).toMatchObject({ viewed: { "src/a.ts": A.revision } });
+    expect(marks.get("src/a.ts")).toBe(A.revision);
+    expect(mutations(gh.calls())).toEqual([]);
+  });
+
+  it("marks a file checked in bb viewed on GitHub", async () => {
+    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
+    const { sync, marks } = await start({ gh });
+    marks.set("src/a.ts", A.revision);
+    const result = await sync([A]);
+    expect(mutations(gh.calls())).toEqual(["mark src/a.ts"]);
+    expect(result).toMatchObject({ github: { files: [{ path: "src/a.ts", viewed: true }] } });
+  });
+
+  it("unmarks on GitHub a file unchecked in bb after they agreed", async () => {
+    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" }]);
+    const { sync, marks } = await start({ gh });
+    await sync([A]);
+    marks.marks.clear();
+    await sync([A]);
+    expect(mutations(gh.calls())).toEqual(["unmark src/a.ts"]);
+  });
+
+  it("clears bb's mark when the file is unmarked on GitHub", async () => {
+    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" }]);
+    const { sync, marks } = await start({ gh });
+    await sync([A]);
+    gh.setFiles([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
+    // Past the half minute GitHub's answer is reused for.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    expect(await sync([A])).toMatchObject({ viewed: {} });
+    expect(marks.writes).toEqual(["mark src/a.ts", "clear src/a.ts"]);
+    expect(mutations(gh.calls())).toEqual([]);
+  });
+
+  it("leaves GitHub alone for a file whose diff differs from the pull request's", async () => {
+    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
+    const { sync, marks } = await start({ gh });
+    marks.set("src/a.ts", A.revision);
+    await sync([A]);
+    expect(mutations(gh.calls())).toEqual([]);
+  });
+
   it("asks GitHub once while its answer is fresh", async () => {
     const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-
-    await Promise.all([
-      harness.behavior.callRpc("viewed_list", { threadId: "thr_a" }),
-      harness.behavior.callRpc("viewed_list", { threadId: "thr_a" }),
-    ]);
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
+    const { sync } = await start({ gh });
+    await Promise.all([sync([A]), sync([A])]);
+    await sync([A]);
     expect(gh.calls()).toHaveLength(1);
   });
 
-  it("marks a file viewed on GitHub when its diff matches", async () => {
+  it("does not send the same change twice when two syncs overlap", async () => {
     const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-
-    const set = await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(set.github?.files[0]?.viewed).toBe(true);
-    const [mutation] = mutations(gh.calls());
-    expect(mutation?.join(" ")).toContain("markFileAsViewed");
-    expect(mutation).toContain("id=PR_node");
-    expect(mutation).toContain("path=src/a.ts");
+    const { sync, marks } = await start({ gh });
+    marks.set("src/a.ts", A.revision);
+    await Promise.all([sync([A]), sync([A])]);
+    expect(mutations(gh.calls())).toEqual(["mark src/a.ts"]);
   });
 
-  it("unmarks a file on GitHub", async () => {
+  it("makes no GitHub calls with sync off", async () => {
     const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" }]);
-    const { harness } = await startSynced(gh);
-
-    const set = await harness.behavior.callRpc("viewed_set", { ...A, viewed: false });
-    expect(set.github?.files[0]?.viewed).toBe(false);
-    expect(mutations(gh.calls())[0]?.join(" ")).toContain("unmarkFileAsViewed");
-  });
-
-  it("marks a rename on GitHub under its current path", async () => {
-    const gh = fakeGh([{ path: "src/new.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-
-    await harness.behavior.callRpc("viewed_set", { ...A, path: "src/old.ts -> src/new.ts", viewed: true });
-    expect(mutations(gh.calls())[0]).toContain("path=src/new.ts");
-  });
-
-  it("keeps a mark local when the diff differs from GitHub's", async () => {
-    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-
-    const set = await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(set.record).toEqual({ "src/a.ts": "+8 -4" });
-    expect(mutations(gh.calls())).toHaveLength(0);
-  });
-
-  it("stays local without a pull request", async () => {
-    const gh = fakeGh([]);
-    const { harness } = await startSynced(gh, false);
-
-    const set = await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(set).toEqual({ record: { "src/a.ts": "+8 -4" }, github: null });
-    expect(gh.calls()).toHaveLength(0);
-  });
-
-  it("stays local when gh is missing", async () => {
-    const { harness } = await startSynced({ path: "/nonexistent/gh-does-not-exist" });
-
-    const set = await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(set).toEqual({ record: { "src/a.ts": "+8 -4" }, github: null });
+    const { sync } = await start({ gh, syncGithub: "off" });
+    await sync([A]);
+    expect(gh.calls()).toEqual([]);
   });
 });
 
-describe("sending marks made in bb to GitHub", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  /** Let the 30 second GitHub cache go stale, as it does between focuses. */
-  const later = () => vi.setSystemTime(Date.now() + 31_000);
-
-  it("marks a file viewed on GitHub once the push makes the diffs match", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    expect(mutations(gh.calls())).toHaveLength(0);
-
-    gh.setFiles([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    later();
-    const listed = await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(listed.github?.files[0]?.viewed).toBe(true);
-    const [mutation] = mutations(gh.calls());
-    expect(mutation?.join(" ")).toContain("markFileAsViewed");
-    expect(mutation).toContain("path=src/a.ts");
-  });
-
-  it("marks a file viewed on GitHub once the pull request is opened", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const pr = { open: false };
-    const { harness } = await startSynced(gh, pr);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-
-    pr.open = true;
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(mutations(gh.calls())).toHaveLength(1);
-  });
-
-  it("sends each mark once, so unmarking it on GitHub afterwards sticks", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const pr = { open: false };
-    const { harness } = await startSynced(gh, pr);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    pr.open = true;
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-
-    // Unmarked on GitHub's Files changed tab.
-    later();
-    const listed = await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(listed.github?.files[0]?.viewed).toBe(false);
-    expect(mutations(gh.calls())).toHaveLength(1);
-  });
-
-  it("keeps waiting while the diff still differs", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(mutations(gh.calls())).toHaveLength(0);
-
-    gh.setFiles([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(mutations(gh.calls())).toHaveLength(1);
-  });
-
-  it("sends nothing for a mark cleared before the push", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: false });
-
-    gh.setFiles([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(mutations(gh.calls())).toHaveLength(0);
-  });
-
-  it("makes no call for a file GitHub already shows viewed", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const gh = fakeGh([{ path: "src/a.ts", additions: 5, deletions: 4, viewerViewedState: "UNVIEWED" }]);
-    const { harness } = await startSynced(gh);
-    await harness.behavior.callRpc("viewed_set", { ...A, viewed: true });
-
-    gh.setFiles([{ path: "src/a.ts", additions: 8, deletions: 4, viewerViewedState: "VIEWED" }]);
-    later();
-    await harness.behavior.callRpc("viewed_list", { threadId: "thr_a" });
-    expect(mutations(gh.calls())).toHaveLength(0);
+describe("problem_report", () => {
+  it("accepts a problem from the content script", async () => {
+    const { harness } = await start();
+    expect(
+      await harness.behavior.callRpc("problem_report", {
+        message: "Could not read the changes panel's file list",
+      }),
+    ).toEqual({ ok: true });
   });
 });

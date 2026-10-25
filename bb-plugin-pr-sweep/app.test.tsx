@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, waitFor, within } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
 const app = await loadPluginApp(() => import("./app.js"));
 
 const HOUR = 60 * 60_000;
@@ -259,7 +262,7 @@ describe("panel", () => {
     // A standing fact about this machine, not news. Above the list it would
     // push the work down the page on every load.
     const slot = render(listing({ skippedRepos: ["acme/gadgets"] }));
-    const notice = await slot.findByText(/Not swept: acme\/gadgets/);
+    const notice = await slot.findByRole("note", { name: /Not swept: acme\/gadgets/ });
     const list = (await rowFor(slot, /Add the widget endpoint/)).closest("ul")!;
     expect(list.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -602,6 +605,19 @@ describe("thread action", () => {
     expect(slot.inspection.rpcCalls.filter((call) => call.method === "workOnThisDraft")).toHaveLength(1);
 
     release?.();
+  });
+
+  it("says so when the draft cannot be fetched, rather than doing nothing", async () => {
+    const slot = render(listing(), {
+      workOnThisDraft: () => {
+        throw new Error('plugin "pr-sweep" is not running');
+      },
+    });
+    fireEvent.click(await slot.findByRole("button", { name: "Start thread" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not start a thread: plugin "pr-sweep" is not running'),
+    );
+    expect(await slot.findByRole("button", { name: "Start thread" })).toBeEnabled();
   });
 
   it("opens the box under the row with the suggested skills, rather than spawning", async () => {
@@ -979,19 +995,20 @@ describe("sync header", () => {
   });
 });
 
-describe("sidebar count", () => {
+describe("navigation badge", () => {
+  const listRows = vi.fn();
+
   function renderBadge(result: Record<string, unknown>) {
     const panel = app.navPanels.find((entry) => entry.path === "prs")!;
-    const slot = renderSlot(
-      { component: panel.experimental_sidebarAccessory! },
-      {},
-      { rpc: { listRows: () => result } },
-    );
+    const useBadge = panel.experimental_useBadge!;
+    const Badge = () => <span data-testid="badge">{JSON.stringify(useBadge())}</span>;
+    listRows.mockReset().mockReturnValue(result);
+    const slot = renderSlot({ component: Badge }, {}, { rpc: { listRows } });
     mounted = slot;
     return slot;
   }
 
-  it("counts every open pull request, with the ones that need you in a red circle", async () => {
+  it("counts the pull requests that need you in red", async () => {
     const slot = renderBadge(
       listing({
         rows: [
@@ -1004,18 +1021,19 @@ describe("sidebar count", () => {
         ],
       }),
     );
-    expect(await slot.findByTitle("5 open")).toHaveTextContent("5");
-    expect(slot.getByTitle("1 need you")).toHaveClass("bg-red-600");
+    await waitFor(() =>
+      expect(JSON.parse(slot.getByTestId("badge").textContent!)).toEqual({ count: 1, tone: "critical", label: "1 need you" }),
+    );
   });
 
-  it("takes a row out of the red circle once a thread is running on it", async () => {
+  it("drops the badge once a thread is running on the only row that needed you", async () => {
     const slot = renderBadge(
       listing({
         rows: [rowFixture({ flags: ["conflict"], group: "needs-action", threadId: "thr_1" })],
       }),
     );
-    expect(await slot.findByTitle("1 open")).toHaveTextContent("1");
-    expect(slot.queryByTitle("1 need you")).toBeNull();
+    await waitFor(() => expect(listRows).toHaveBeenCalled());
+    expect(slot.getByTestId("badge")).toHaveTextContent("null");
   });
 });
 

@@ -26,4 +26,19 @@ describe("createGhRunner", () => {
     const runner = createGhRunner("/bin/echo");
     expect((await runner.run(["hello", "world"])).trim()).toBe("hello world");
   });
+
+  it("kills a call in flight when its signal aborts", async () => {
+    const controller = new AbortController();
+    const runner = createGhRunner("/bin/sleep", controller.signal);
+    const started = Date.now();
+    const call = runner.run(["30"]);
+    controller.abort();
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("refuses a call once its signal has aborted", async () => {
+    const runner = createGhRunner("/bin/echo", AbortSignal.abort());
+    await expect(runner.run(["hello"])).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

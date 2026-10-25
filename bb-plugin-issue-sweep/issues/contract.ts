@@ -67,6 +67,16 @@ const rowSchema = z.object({
   labels: z.array(z.string()),
   boardStatus: z.string().nullable(),
   onBoard: z.boolean(),
+  /** The first configured board the issue is on. Nullish on rows stored before it was recorded. */
+  board: z.string().nullish(),
+  /**
+   * The Status options of the board this row's moves go to, by name and in
+   * the board's order: the board it is on, or the one it would be added to.
+   * Empty when that board could not be read. The panel picks by name and
+   * never sees an option id: the ids are the board's private node ids, and the
+   * server has to resolve them anyway.
+   */
+  statusOptions: z.array(z.string()),
   blockedBy: z.number(),
   closingPr: z.number().nullable(),
   /**
@@ -113,16 +123,8 @@ export const rpcContract = defineRpcContract({
       staleAfterDays: z.number(),
       /** The status that means "waiting on a reviewer". */
       reviewStatus: z.string(),
-      /**
-       * The board's own Status options, by name and in the board's order. The
-       * panel picks by name and never sees an option id: the ids are the
-       * board's private node ids, and the server has to resolve them anyway.
-       */
-      statusOptions: z.array(z.string()),
       /** Board statuses the sidebar badge counts. Empty counts every row. */
       countedStatuses: z.array(z.string()),
-      /** Named so the panel can say which board it is offering to add to. */
-      boardName: z.string(),
       sweptAt: z.number().nullable(),
       /** The past hour of sweeps and what each cost on GitHub's GraphQL budget. */
       usage: z
@@ -310,16 +312,20 @@ export const rpcContract = defineRpcContract({
   listComments: {
     input: z.object({ repo: z.string(), number: z.number() }).strict(),
     output: z.object({
-      comments: z.array(
+      entries: z.array(
         z.object({
+          kind: z.literal("comment"),
           author: z.string(),
           avatarUrl: z.string(),
+          bot: z.boolean().optional(),
+          you: z.boolean().optional(),
+          /** Markdown, as written. */
           body: z.string(),
           url: z.string(),
           at: z.number(),
         }),
       ),
-      /** Every comment the issue has, of which `comments` is the latest. */
+      /** Every comment the issue has, of which `entries` is the latest. */
       total: z.number(),
       error: z.string().nullable(),
     }),

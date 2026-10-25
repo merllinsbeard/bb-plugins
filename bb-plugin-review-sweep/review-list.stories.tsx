@@ -18,6 +18,7 @@ import { relativeTime } from "./review/format";
 import { addDaysTo, localDay } from "@danielbachhuber/bb-plugin-component-library/parse-day";
 import { FeedbackDrawer, FeedbackList, type FeedbackEntry } from "sweep-ui/feedback";
 import { PlainLink } from "sweep-ui/row";
+import { Markdown } from "@get-bb/plugin-sdk/app";
 
 export default {
   title: "review-sweep/Review list",
@@ -415,11 +416,11 @@ export function CommentsDrawer() {
     <StoryCard>
       <StoryRow label="Open" hint="What is on #437, your own threads included.">
         <div className="w-full max-w-3xl rounded-md border border-border bg-muted/40 px-3 py-2">
-          <FeedbackList entries={FEEDBACK} age={age} url={url} Link={PlainLink} />
+          <FeedbackList entries={FEEDBACK} age={age} url={url} Link={PlainLink} Markdown={Markdown} />
         </div>
       </StoryRow>
       <StoryRow label="Reading" hint="While the one request to GitHub runs.">
-        <FeedbackDrawer load={() => new Promise(() => {})} age={age} url={url} Link={PlainLink} />
+        <FeedbackDrawer load={() => new Promise(() => {})} age={age} url={url} Link={PlainLink} Markdown={Markdown} />
       </StoryRow>
       <StoryRow label="Failed" hint="GitHub could not be reached.">
         <FeedbackDrawer
@@ -427,6 +428,7 @@ export function CommentsDrawer() {
           age={age}
           url={url}
           Link={PlainLink}
+          Markdown={Markdown}
         />
       </StoryRow>
     </StoryCard>

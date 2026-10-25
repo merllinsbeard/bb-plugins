@@ -26,36 +26,44 @@ describe("seenThroughOwn", () => {
 
 describe("parseComments", () => {
   const payload = (nodes: unknown[], totalCount = nodes.length) =>
-    JSON.stringify({ data: { repository: { issue: { comments: { totalCount, nodes } } } } });
+    JSON.stringify({ data: { viewer: { login: "octocat" }, repository: { issue: { comments: { totalCount, nodes } } } } });
 
-  it("reads each comment's author, text, link, and time, oldest first as GitHub sends them", () => {
+  it("reads each comment's author, Markdown, link, and time, oldest first as GitHub sends them, marking yours and bots'", () => {
     const raw = payload([
       {
-        author: { login: "hubber", avatarUrl: "https://example.test/hubber.png" },
-        bodyText: "  Can this wait a sprint?\n",
+        author: { __typename: "User", login: "hubber", avatarUrl: "https://example.test/hubber.png" },
+        body: "  Can this wait a **sprint**?\n",
         url: "https://github.com/acme/widgets/issues/42#issuecomment-1",
         createdAt: "2026-01-02T03:04:05Z",
       },
-      { author: { login: "octocat", avatarUrl: "" }, bodyText: "Yes.", url: "u2", createdAt: "2026-01-03T00:00:00Z" },
+      { author: { __typename: "User", login: "octocat", avatarUrl: "" }, body: "Yes.", url: "u2", createdAt: "2026-01-03T00:00:00Z" },
+      {
+        author: { __typename: "Bot", login: "acme-ci", avatarUrl: "" },
+        body: "<!-- run:7 -->\n<sub>Triaged</sub>",
+        url: "u3",
+        createdAt: "2026-01-04T00:00:00Z",
+      },
     ]);
     expect(parseComments(raw)).toEqual({
-      comments: [
+      entries: [
         {
+          kind: "comment",
           author: "hubber",
           avatarUrl: "https://example.test/hubber.png",
-          body: "Can this wait a sprint?",
+          body: "Can this wait a **sprint**?",
           url: "https://github.com/acme/widgets/issues/42#issuecomment-1",
           at: Date.parse("2026-01-02T03:04:05Z"),
         },
-        { author: "octocat", avatarUrl: "", body: "Yes.", url: "u2", at: Date.parse("2026-01-03T00:00:00Z") },
+        { kind: "comment", author: "octocat", avatarUrl: "", you: true, body: "Yes.", url: "u2", at: Date.parse("2026-01-03T00:00:00Z") },
+        { kind: "comment", author: "acme-ci", avatarUrl: "", bot: true, body: "Triaged", url: "u3", at: Date.parse("2026-01-04T00:00:00Z") },
       ],
-      total: 2,
+      total: 3,
     });
   });
 
   it("keeps a deleted account's comment in place, so the new ones still line up with the end", () => {
-    const { comments } = parseComments(payload([{ author: null, bodyText: "Old note", url: "u", createdAt: "2026-01-01T00:00:00Z" }]));
-    expect(comments.map((comment) => comment.author)).toEqual(["ghost"]);
+    const { entries } = parseComments(payload([{ author: null, body: "Old note", url: "u", createdAt: "2026-01-01T00:00:00Z" }]));
+    expect(entries.map((entry) => entry.author)).toEqual(["ghost"]);
   });
 
   it("reports the issue's full count when it has more comments than were read", () => {
@@ -63,6 +71,6 @@ describe("parseComments", () => {
   });
 
   it("reads nothing from an issue GitHub did not return", () => {
-    expect(parseComments(JSON.stringify({ data: { repository: { issue: null } } }))).toEqual({ comments: [], total: 0 });
+    expect(parseComments(JSON.stringify({ data: { repository: { issue: null } } }))).toEqual({ entries: [], total: 0 });
   });
 });

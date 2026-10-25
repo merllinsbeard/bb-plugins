@@ -120,15 +120,17 @@ function DecidingRow({
       )}
     >
       {/* Top-aligned, so the + and the buttons sit beside the name, not between it and the summary. */}
-      <div className={cn("flex gap-2.5", item.draft === "" ? "items-center" : "items-start")}>
-        <Icon name="Plus" className={cn("size-3.5 shrink-0 text-muted-foreground", item.draft !== "" && "mt-[7px]")} aria-hidden />
-        <span className="min-w-0 flex-1">
+      <div className={cn("flex gap-2.5", item.draft === "" && !summary ? "items-center" : "items-start")}>
+        <Icon name="Plus" className={cn("size-3.5 shrink-0 text-muted-foreground", (item.draft !== "" || summary) && "mt-[7px]")} aria-hidden />
+        <span className={cn("min-w-0 flex-1", item.draft === "" && summary && "pt-1")}>
           {item.draft === "" ? (
-            <span className="flex min-w-0 items-baseline gap-2 text-sm text-foreground">
-              <Title item={item} className={cn(dismissed && "line-through")} />
-              <Badges item={item} />
-              {summary ? <span className="min-w-0 truncate text-xs text-muted-foreground">{summary}</span> : null}
-            </span>
+            <>
+              <span className="flex min-w-0 items-baseline gap-2 text-sm text-foreground">
+                <Title item={item} className={cn(dismissed && "line-through")} />
+                <Badges item={item} />
+              </span>
+              {summary ? <span className="mt-0.5 block break-words text-xs text-muted-foreground">{summary}</span> : null}
+            </>
           ) : (
             <>
               <span className="flex min-w-0 items-center gap-2">
@@ -144,7 +146,7 @@ function DecidingRow({
                 />
                 <Badges item={item} />
               </span>
-              {summary ? <span className="mt-0.5 block truncate text-xs text-muted-foreground">{summary}</span> : null}
+              {summary ? <span className="mt-0.5 block break-words text-xs text-muted-foreground">{summary}</span> : null}
             </>
           )}
           {failure === null ? null : (

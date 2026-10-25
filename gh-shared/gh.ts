@@ -52,14 +52,20 @@ function ghStderr(error: unknown): string {
   return typeof stderr === "string" ? stderr : "";
 }
 
-/** Argument-array spawn only. A shell string is never constructed. */
-export function createGhRunner(ghPath: string): GhRunner {
+/**
+ * Argument-array spawn only. A shell string is never constructed.
+ *
+ * An aborted `signal` kills the gh call in flight and makes later calls fail
+ * at once, so a background service can stop mid-sweep within bb's stop window.
+ */
+export function createGhRunner(ghPath: string, signal?: AbortSignal): GhRunner {
   return {
     async run(args: string[]) {
       try {
         const { stdout } = await execFileAsync(ghPath, args, {
           maxBuffer: 32 * 1024 * 1024,
           timeout: 60_000,
+          signal,
         });
         return stdout;
       } catch (error) {

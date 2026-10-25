@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { githubPath, isMarked, sameDiff, syncMode, syncedProgress, type GithubState } from "./github";
+import {
+  reconcile,
+  sameBaseline,
+  sameDiff,
+  syncMode,
+  withGithubViewed,
+  type GithubState,
+} from "./github";
 import type { DiffFileEntry } from "./marks";
 
 const pull = (files: GithubState["files"]): GithubState => ({
@@ -8,82 +15,127 @@ const pull = (files: GithubState["files"]): GithubState => ({
   files,
 });
 
-const entry = (path: string, additions: number, deletions: number, binary = false): DiffFileEntry => ({
+const entry = (path: string, additions = 2, deletions = 2, revision = `rev-${path}`): DiffFileEntry => ({
   path,
   previousPath: null,
   changeKind: "modified",
   additions,
   deletions,
-  binary,
+  binary: false,
+  revision,
 });
 
-describe("githubPath", () => {
-  it("is the path itself for an ordinary file", () => {
-    expect(githubPath("src/a.ts")).toBe("src/a.ts");
-  });
-
-  it("is the current path for a rename", () => {
-    expect(githubPath("src/old.ts -> src/new.ts")).toBe("src/new.ts");
-  });
+const file = (path: string, viewed: boolean, additions = 2, deletions = 2) => ({
+  path,
+  additions,
+  deletions,
+  viewed,
 });
 
 describe("sameDiff", () => {
-  const file = { path: "a.ts", additions: 8, deletions: 4, viewed: false };
-
   it("matches on the counts", () => {
-    expect(sameDiff(file, "+8 -4")).toBe(true);
-    expect(sameDiff(file, "+8 -5")).toBe(false);
-  });
-
-  it("matches a binary header's `none` to GitHub's zero counts", () => {
-    expect(sameDiff({ ...file, additions: 0, deletions: 0 }, "none")).toBe(true);
-    expect(sameDiff(file, "none")).toBe(false);
+    expect(sameDiff(file("a.ts", false, 8, 4), entry("a.ts", 8, 4))).toBe(true);
+    expect(sameDiff(file("a.ts", false, 8, 4), entry("a.ts", 8, 5))).toBe(false);
   });
 });
 
 describe("syncMode", () => {
   it("is none without a pull request", () => {
-    expect(syncMode(null, { path: "a.ts", fingerprint: "+1 -1" })).toEqual({ kind: "none" });
+    expect(syncMode(null, entry("a.ts")).kind).toBe("none");
   });
 
-  it("is local for a file the pull request does not have", () => {
-    expect(syncMode(pull([]), { path: "a.ts", fingerprint: "+1 -1" })).toEqual({ kind: "local", number: 42 });
+  it("syncs a file whose diff is GitHub's", () => {
+    const mode = syncMode(pull([file("a.ts", true)]), entry("a.ts"));
+    expect(mode).toMatchObject({ kind: "synced", number: 42 });
   });
 
-  it("is local when the counts differ", () => {
-    const github = pull([{ path: "a.ts", additions: 1, deletions: 0, viewed: true }]);
-    expect(syncMode(github, { path: "a.ts", fingerprint: "+1 -1" }).kind).toBe("local");
-  });
-});
-
-describe("isMarked", () => {
-  const github = pull([{ path: "a.ts", additions: 1, deletions: 1, viewed: false }]);
-
-  it("takes GitHub's state over a local mark when the diff matches", () => {
-    expect(isMarked({ "a.ts": "+1 -1" }, github, { path: "a.ts", fingerprint: "+1 -1" })).toBe(false);
-  });
-
-  it("takes the local mark when the diff differs", () => {
-    expect(isMarked({ "a.ts": "+2 -1" }, github, { path: "a.ts", fingerprint: "+2 -1" })).toBe(true);
+  it("is Local for a file whose diff differs, or that GitHub does not list", () => {
+    const github = pull([file("a.ts", true, 2, 2)]);
+    expect(syncMode(github, entry("a.ts", 3, 2)).kind).toBe("local");
+    expect(syncMode(github, entry("b.ts")).kind).toBe("local");
   });
 });
 
-describe("syncedProgress", () => {
-  it("counts GitHub's marks and local marks together", () => {
-    const github = pull([
-      { path: "a.ts", additions: 1, deletions: 1, viewed: true },
-      { path: "b.ts", additions: 2, deletions: 0, viewed: false },
-    ]);
-    const progress = syncedProgress({ "c.ts": "+3 -3" }, github, [
-      entry("a.ts", 1, 1),
-      entry("b.ts", 2, 0),
-      entry("c.ts", 3, 3),
-    ]);
-    expect(progress).toEqual({ viewed: 2, total: 3 });
+describe("withGithubViewed", () => {
+  it("changes one file and keeps the rest of the state", () => {
+    const before = { ...pull([file("a.ts", false), file("b.ts", false)]), id: "PR_1" };
+    const after = withGithubViewed(before, "a.ts", true);
+    expect(after.id).toBe("PR_1");
+    expect(after.files.map((f) => f.viewed)).toEqual([true, false]);
+  });
+});
+
+describe("reconcile", () => {
+  const a = entry("a.ts");
+
+  it("records agreement and changes nothing when both sides match", () => {
+    const plan = reconcile([a], { "a.ts": a.revision }, pull([file("a.ts", true)]), {});
+    expect(plan).toEqual({
+      markInBb: [],
+      clearInBb: [],
+      pushToGithub: [],
+      baseline: { "a.ts": { revision: a.revision, viewed: true } },
+    });
   });
 
-  it("counts a local mark on a binary image stored as `none`", () => {
-    const progress = syncedProgress({ "logo.png": "none" }, null, [entry("logo.png", 0, 0, true)]);
-    expect(progress).toEqual({ viewed: 1, total: 1 });
+  it("sends a mark made in bb before the pull request existed", () => {
+    const plan = reconcile([a], { "a.ts": a.revision }, pull([file("a.ts", false)]), {});
+    expect(plan.pushToGithub).toEqual([{ path: "a.ts", viewed: true }]);
+    expect(plan.baseline["a.ts"]).toEqual({ revision: a.revision, viewed: true });
+  });
+
+  it("brings in a mark made on GitHub that bb has not seen", () => {
+    const plan = reconcile([a], {}, pull([file("a.ts", true)]), {});
+    expect(plan.markInBb).toEqual([a]);
+    expect(plan.pushToGithub).toEqual([]);
+  });
+
+  it("unmarks on GitHub when the file was unchecked in bb", () => {
+    const baseline = { "a.ts": { revision: a.revision, viewed: true } };
+    const plan = reconcile([a], {}, pull([file("a.ts", true)]), baseline);
+    expect(plan.pushToGithub).toEqual([{ path: "a.ts", viewed: false }]);
+    expect(plan.markInBb).toEqual([]);
+    expect(plan.baseline["a.ts"]?.viewed).toBe(false);
+  });
+
+  it("clears bb's mark when the file was unmarked on GitHub", () => {
+    const baseline = { "a.ts": { revision: a.revision, viewed: true } };
+    const plan = reconcile([a], { "a.ts": a.revision }, pull([file("a.ts", false)]), baseline);
+    expect(plan.clearInBb).toEqual([a]);
+    expect(plan.pushToGithub).toEqual([]);
+  });
+
+  it("marks on GitHub when the file was checked in bb", () => {
+    const baseline = { "a.ts": { revision: a.revision, viewed: false } };
+    const plan = reconcile([a], { "a.ts": a.revision }, pull([file("a.ts", false)]), baseline);
+    expect(plan.pushToGithub).toEqual([{ path: "a.ts", viewed: true }]);
+  });
+
+  it("starts over once the file changes, rather than trusting an old agreement", () => {
+    const changed = entry("a.ts", 2, 2, "rev-new");
+    const baseline = { "a.ts": { revision: "rev-old", viewed: true } };
+    const plan = reconcile([changed], { "a.ts": changed.revision }, pull([file("a.ts", false)]), baseline);
+    expect(plan.pushToGithub).toEqual([{ path: "a.ts", viewed: true }]);
+  });
+
+  it("leaves Local files alone and forgets their agreement", () => {
+    const local = entry("a.ts", 9, 9);
+    const baseline = { "a.ts": { revision: local.revision, viewed: true } };
+    const plan = reconcile([local], { "a.ts": local.revision }, pull([file("a.ts", false)]), baseline);
+    expect(plan).toEqual({ markInBb: [], clearInBb: [], pushToGithub: [], baseline: {} });
+  });
+
+  it("compares bb's mark against the file's current revision", () => {
+    const plan = reconcile([a], { "a.ts": "an older revision" }, pull([file("a.ts", true)]), {});
+    expect(plan.markInBb).toEqual([a]);
+  });
+});
+
+describe("sameBaseline", () => {
+  it("is true for the same agreement and false for any difference", () => {
+    const one = { "a.ts": { revision: "r1", viewed: true } };
+    expect(sameBaseline(one, { "a.ts": { revision: "r1", viewed: true } })).toBe(true);
+    expect(sameBaseline(one, { "a.ts": { revision: "r1", viewed: false } })).toBe(false);
+    expect(sameBaseline(one, {})).toBe(false);
   });
 });

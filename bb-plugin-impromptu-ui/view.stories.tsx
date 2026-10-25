@@ -1,4 +1,4 @@
-import { codeReviewView, dependabotConflictView, grantEvidenceView, grantSectionThreads, grantSectionThreadsView, grantView, groceryView, staplesView, triageView } from "./view/fixtures";
+import { codeReviewView, dependabotConflictView, grantEvidenceView, grantSectionThreads, grantSectionThreadsView, grantView, groceryView, staplesView, triageView, vendorsView } from "./view/fixtures";
 import { ChangesBlock } from "./view/changes-block";
 import { ListPanel } from "./view/list-panel";
 import type { View } from "./view/schema";
@@ -124,6 +124,11 @@ const staples: StoredView = { ...fresh, key: "staples", view: staplesView };
 /** A list view: the staples to add on top as dashed rows, each name editable before Add, with Skip; the list as it stands below. */
 export function ListFresh() {
   return <List stored={staples} />;
+}
+
+/** Rows without a field to edit: the name beside the buttons, and its full description beneath, wrapped. */
+export function ListDescriptions() {
+  return <List stored={{ ...fresh, key: "vendors", view: vendorsView }} />;
 }
 
 /** Add running on one row. */

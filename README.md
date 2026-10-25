@@ -2,6 +2,12 @@
 
 Plugins for [bb](https://getbb.app), the agentic IDE.
 
+> bb's secret power is that it's nailed the ergonomics of authoring
+> customizations (inline agents and plugin architecture). You can modify bb
+> just as easily as modifying whatever codebase you're working in!
+>
+> From [bb is the bee's knees](https://danielbachhuber.com/bb-is-the-bees-knees/)
+
 ## ⚠️ This repository is public
 
 Nothing here may contain a credential, a real private repository or project
@@ -14,27 +20,71 @@ secrets, HTTP tokens, and `data.db` all live there and all stay there.
 
 ## The plugins
 
+### Published plugins
+
+These are in the bb-community marketplace, released from a `<id>/vX.Y.Z` tag.
+Move a plugin here when it is first published.
+
+#### [Automation Palette](https://getbb.app/marketplace/automation-palette)
+
+Run any bb automation from the quick palette, without opening the Automations page.
+
+Source: [`bb-plugin-automation-palette`](bb-plugin-automation-palette)
+
+![bb's quick palette searching for automation, listing a Run automation row for each automation with its project](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/automation-palette/quick-palette--with-the-plugin.png)
+
+#### [Diff Viewed Enhanced](https://getbb.app/marketplace/diff-viewed)
+
+Adds a viewed count and GitHub sync to bb's own Viewed checkboxes, so you can see how much of a long diff you've read.
+
+Source: [`bb-plugin-diff-viewed`](bb-plugin-diff-viewed)
+
+![The changes panel with bb's Viewed checkbox on each file and 3/6 viewed at the top, the viewed files folded away](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/diff-viewed/changes-panel--viewed.png)
+
+#### [Impromptu UI](https://getbb.app/marketplace/impromptu-ui)
+
+Turns your agent's walls of text into interfaces you can click.
+
+Source: [`bb-plugin-impromptu-ui`](bb-plugin-impromptu-ui)
+
+![A milestone triage shown above a thread's composer, with each issue's evidence, drafted comment, and Post and close button beside the chat](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/impromptu-ui/thread--triage.png)
+
+#### [Markdown Editor](https://getbb.app/marketplace/markdown-editor)
+
+Edit markdown files in the tab bb opens them in, preview the result, and save with Cmd+S without overwriting an agent's edits.
+
+Source: [`bb-plugin-markdown-editor`](bb-plugin-markdown-editor)
+
+![A markdown file open in bb's Raw view with unsaved changes, and Discard and Save buttons](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/markdown-editor/tab--raw-with-unsaved-changes.png)
+
+#### [Tokenomics](https://getbb.app/marketplace/tokenomics)
+
+See what your threads cost in tokens and time, and whether your subscription's session and weekly limits will last until they reset.
+
+Source: [`bb-plugin-tokenomics`](bb-plugin-tokenomics)
+
+![Tokenomics' title bar button open over a thread, showing the session's token use and when it is on pace to run out](bb-plugin-tokenomics/screenshots/page--window-with-limits.png)
+
+### Unpublished plugins
+
+These are installed from this checkout only, not from the marketplace.
+
 | Directory | bb id | What it does |
 | --- | --- | --- |
-| `bb-plugin-automation-palette` | `automation-palette` | Run any bb automation from the quick palette, without opening the Automations page. |
 | `bb-plugin-contributor-dashboard` | `contributor-dashboard` | A dashboard of how people contribute to one GitHub repository, from a local mirror of its pull requests, reviews, issues and releases; it opens with a flow diagram of the delivery stages, showing what is waiting in each step and where everything opened in the period went, including skipped reviews and work sent back, then an Issues and a Pull requests section time each step with the median, p75 and p90 and chart, for everyone and per person, the pull requests opened and merged and the reviews requested and given, with the work that bled into a later week, over a preset span or a range of dates you pick, and ends with each GitHub release's pull requests by kind, its patches, and who merged and reviewed them; a step, a name, or a section heading opens its own page, and every row in a list names its assignee and starts a thread on it. |
-| `bb-plugin-dev-bar` | `dev-bar` | A status bar along the bottom of a thread that shows which of the checkout's dev services are running, and starts, stops, or restarts them. |
+| `bb-plugin-dev-bar` | `dev-bar` | A status bar under a thread that starts, stops, and restarts its checkout's dev services, and stops them when its last thread is archived. |
 | `bb-plugin-diff-comment` | `diff-comment` | Leave review comments inline on a thread's diff, then have the agent work through them one at a time. The agent can offer the points it raises in a review as comments to add, the thread's pull request review comments show on the same diff, and any comment can go to the pull request as a draft review comment. |
-| `bb-plugin-diff-viewed` | `diff-viewed` | Use a Viewed checkbox on each file to keep track of what you've read in a long diff, synced with GitHub on the thread's pull request. |
 | `bb-plugin-gh-context` | `gh-context` | A banner above the composer showing the thread's pull request and its reviewers, the GitHub issues it works on, its changes, and a Harvest timer, in place of bb's own. |
 | `bb-plugin-hacks` | `hacks` | Local patches to bb's own UI, each one standing in for a fix that has not landed upstream yet. Currently: remembers the changes panel's stacked/split view mode and line-wrap toggle across reloads, remembers each thread's range (such as Uncommitted changes) when you switch away and back, opens the unread files bb folds away in a large diff, adds a button to each sidebar project that opens its checkout in your editor, shows whether each project's checkout is behind origin and pulls it on click, then runs its sync script, and starts diff code blocks in chat wrapped. |
 | `bb-plugin-harvest` | `harvest` | Connects bb to Harvest so other plugins can start and stop timers on GitHub issues and pull requests. |
-| `bb-plugin-impromptu-ui` | `impromptu-ui` | Turns your agent's walls of text into interfaces you can click. |
-| `bb-plugin-issue-sweep` | `issue-sweep` | Open GitHub issues assigned to you, split into what needs you and everything else grouped by board status, with local notes, an On hold box that sinks an issue to the bottom, new comment counts, and the comments a click away. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its counts also sit in bb's top bar on every page, and clicking them opens the list. Needs gh-context. |
-| `bb-plugin-markdown-editor` | `markdown-editor` | Edit markdown files in the tab bb opens them in, preview the result, and save with Cmd+S without overwriting an agent's edits. |
+| `bb-plugin-issue-sweep` | `issue-sweep` | Open GitHub issues assigned to you, split into what needs you and everything else grouped by board status, with local notes, an On hold box that sinks an issue to the bottom, new comment counts, and the comments a click away. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Needs gh-context. |
 | `bb-plugin-new-issue` | `new-issue` | Draft a GitHub issue from a few lines of notes, in a thread that runs the draft-issue-description skill. |
-| `bb-plugin-now` | `now` | One list of what needs doing now, from Todoist and your Gmail inbox, with GitHub notifications gathered per pull request or issue, showing each pull request's reviewers, and Google Docs comments per document. Overdue tasks, and mail left in the inbox more than a day, are tinted red and say how late they are. A square per row above the list shows how Now splits into urgent (overdue tasks and Todoist's Inbox), unread email, today, your own items and email to you, requests of you, what can be archived, and what is minor, and pressing a run shows only its rows. Todoist descriptions render as Markdown, with open subtasks listed beneath. Complete, rename, describe, reschedule, postpone, reprioritize, move, or delete tasks, read an email in full beside the list, open an email or GitHub comment the snippet cut short in full, archive email or mark it read, answer calendar invitations, accept a new time a guest proposes for your event, reply on GitHub, merge your own pull requests, and start a thread from any row. Clicking the sync time shows the past hour's calls to Todoist, Gmail, Calendar, and GitHub, sync by sync. A column beside the list shows the week's priorities, written in by Weekly Review from your journal, with the hours each has had, and you check each one off there. Its urgent, due-today, and total counts also sit in bb's top bar on every page, and clicking them opens Now. |
+| `bb-plugin-now` | `now` | One list of what needs doing now, from Todoist and your Gmail inbox, with GitHub notifications gathered per pull request or issue, showing each pull request's reviewers, and Google Docs comments per document. Overdue tasks, and mail left in the inbox more than a day, are tinted red and say how late they are. A square per row above the list shows how Now splits into urgent (overdue tasks and Todoist's Inbox), unread email, today, your own items and email to you, requests of you, what can be archived, and what is minor, and pressing a run shows only its rows. Todoist descriptions render as Markdown, with open subtasks listed beneath. Complete, rename, describe, reschedule, postpone, reprioritize, move, or delete tasks, read an email in full beside the list, open an email or GitHub comment the snippet cut short in full, archive email or mark it read, answer calendar invitations, accept a new time a guest proposes for your event, reply on GitHub, merge your own pull requests, and start a thread from any row. Clicking the sync time shows the past hour's calls to Todoist, Gmail, Calendar, and GitHub, sync by sync. A column beside the list shows the week's priorities, written in by Weekly Review from your journal, with the hours each has had, and you check each one off there. Its icon in bb's navigation shows the urgent count in red, or the due-today count in amber. |
 | `bb-plugin-plugin-shelf` | `plugin-shelf` | Lists the plugins in your bb-plugins checkout as published and current, published with commits not yet released (with those commits), or personal, with each published plugin's install count, on a My plugins page in bb's Plugins screen, with a button on each to start a thread on it and one to publish an update where one is due. |
 | `bb-plugin-presentations` | `presentations` | Give a talk from a bb thread: the agent writes the slides as numbered markdown files, and a Present button shows them beside the chat with each file listed for editing, a full-screen mode, and a separate window for the projector, styled by the deck's own `style.css` when it has one. |
-| `bb-plugin-pr-sweep` | `pr-sweep` | Open pull requests you authored in one list, newest first with in-progress ones on top and those waiting on others closed to one line at the bottom, with local notes, new comment counts, review comments a click away, a Dismiss for failing checks you cannot fix, and where a stacked pull request sits in its stack. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its counts also sit in bb's top bar on every page, and clicking them opens the list. Needs gh-context. |
-| `bb-plugin-review-sweep` | `review-sweep` | Open pull requests waiting on a review from you in one list, ordered Now, Next, and Later by what needs you, oldest request first, with local notes, new comment counts, comments a click away, and where a stacked pull request sits in its stack, a Snooze that sinks a request to one line until a day you pick, plus Batch to start reviews for several at once. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its counts also sit in bb's top bar on every page, and clicking them opens the list. Needs gh-context. |
+| `bb-plugin-pr-sweep` | `pr-sweep` | Open pull requests you authored in one list, newest first with in-progress ones on top and those waiting on others closed to one line at the bottom, with local notes, new comment counts, review comments a click away, a Dismiss for failing checks you cannot fix, and where a stacked pull request sits in its stack. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its icon in bb's navigation shows how many need you, in red. Needs gh-context. |
+| `bb-plugin-review-sweep` | `review-sweep` | Open pull requests waiting on a review from you in one list, ordered Now, Next, and Later by what needs you, oldest request first, with local notes, new comment counts, comments a click away, and where a stacked pull request sits in its stack, a Snooze that sinks a request to one line until a day you pick, plus Batch to start reviews for several at once. Clicking the sync time shows what the past hour of sweeps cost against GitHub's rate limit. Its icon in bb's navigation shows how many have waited too long, in red. Needs gh-context. |
 | `bb-plugin-super-diff` | `super-diff` | Group the Diff tab by concern, with an explanation for each group and notes on tricky code, plus a note on any line you ask about. |
-| `bb-plugin-tokenomics` | `tokenomics` | See what your threads cost in tokens and time, and whether your subscription's session and weekly limits will last until they reset. |
 | `bb-plugin-weekly-review` | `weekly-review` | One page of what you actually did this week, gathered at 7am and 1pm on weekdays, sorted into workstreams by rules you refine, and set against the priorities in last week's entry, to write the journal entry from. It sends those priorities to the Now page, with each one's hours, and shows which you checked off there. A skill writes up the work of any thread as a journal entry in the same format, and adds it to the doc once you have edited and accepted it. Another drafts last month's wins from the journal into your wins doc. |
 
 ### Retired plugins

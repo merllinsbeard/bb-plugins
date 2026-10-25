@@ -1,6 +1,6 @@
 # Dev Bar
 
-A status bar along the bottom of a thread that shows which of the checkout's dev services are running, and starts, stops, or restarts them.
+A status bar under a thread that starts, stops, and restarts its checkout's dev services, and stops them when its last thread is archived.
 
 ![A thin bar along the bottom of a thread, under the composer, in a wide and a narrow pane: a small ring with one green, amber, or grey slice per service, then each service as a green, amber, or grey pill, and Start all, Start with sync, Stop all, and Reset database buttons on the right, shown as icons in the narrow pane](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/dev-bar/strip--running.png)
 
@@ -10,6 +10,7 @@ A status bar along the bottom of a thread that shows which of the checkout's dev
 - Click a service to **Open** the service's URL, or to **Start**, **Stop**, or **Restart** it.
 - Click a button at the right end of the bar, such as **Start all**, to run a command the repository declares. When nothing is running, the first button that starts things is filled. A button with a question asks it first; click again to confirm.
 - A failed command's last lines show above the bar. Click **Start thread** to have an agent fix it in the same checkout, or **Set up in a thread** when the checkout is missing a program the command needs, such as before its dependencies are installed. When the bar couldn't read the services, **Retry** runs the status command again.
+- Archive the last thread working in a checkout, and the plugin stops that checkout's running and starting services with the manifest's `stop` command. While another thread still uses the checkout, its services keep running.
 
 ![The bar with Web in red, and above it a note reading "Start web failed" with the command and the error it printed](https://raw.githubusercontent.com/danielbachhuber/bb-plugins-screenshots/main/dev-bar/strip--action-failed.png)
 
@@ -42,6 +43,8 @@ The status command prints JSON listing each service:
 }
 ```
 
+Each worktree of a repository runs its own services, so a dev server or Storybook on a fixed port collides with the same server in another worktree. When the skill sets up the bar, it suggests running each checkout's services on ports of their own, saved in the checkout, and leaving a service every checkout shares, such as a database, on its fixed port.
+
 For a repository that commits no manifest, put the same file at `.bb/dev-bar.local.json` in one checkout and keep it out of git, or save it for every checkout of a bb project with `bb dev-bar manifest set <file>`. The bar uses the first it finds, in that order, and says which on hover over the count.
 
 The `dev-bar` skill in [`skills/dev-bar/SKILL.md`](skills/dev-bar/SKILL.md) is the full contract: every field, and what the commands must do.
@@ -62,7 +65,7 @@ bb dev-bar manifest clear [--project <id>]        # remove it
 
 ## Requirements
 
-A checkout on the machine bb runs on. Commands run in the checkout through your login shell. While a thread is on screen, the plugin runs the status command every 5 seconds, and every second for 15 seconds after you click a button.
+A checkout on the machine bb runs on. Commands run in the checkout through your login shell. While a thread is on screen, the plugin runs the status command every 5 seconds, and every second for 15 seconds after you click a button. When a thread is archived, it lists the checkout's other live threads once, and if none are left, runs the status command once and `stop` once per running service.
 
 ## Related plugins
 

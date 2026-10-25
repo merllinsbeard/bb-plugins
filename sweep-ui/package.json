@@ -18,6 +18,7 @@
     "./summary": "./summary.tsx",
     "./note": "./note.tsx",
     "./banner": "./banner.tsx",
+    "./skipped-repos": "./skipped-repos.tsx",
     "./pull-request": "./pull-request.tsx",
     "./stack-chip": "./stack-chip.tsx",
     "./actions": "./actions.tsx",

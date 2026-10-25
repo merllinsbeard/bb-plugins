@@ -239,7 +239,7 @@ describe("panel", () => {
 
   it("names held-back repositories below the list, alongside rows that did match", async () => {
     const slot = render(listing({ skippedRepos: ["acme/gadgets"] }));
-    const notice = await slot.findByText(/Not shown: acme\/gadgets/);
+    const notice = await slot.findByRole("note", { name: /Not shown: acme\/gadgets/ });
     const list = (await rowFor(slot, /Add the widget endpoint/)).closest("ul")!;
     expect(list.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -715,25 +715,28 @@ describe("batch", () => {
   });
 });
 
-describe("sidebar count", () => {
-  function renderCount(result: Record<string, unknown>) {
-    const slot = renderSlot(
-      { component: app.navPanels[0]!.experimental_sidebarAccessory! },
-      { subPath: "" },
-      { rpc: { listRows: () => result } },
-    );
+describe("navigation badge", () => {
+  const listRows = vi.fn();
+
+  function renderBadge(result: Record<string, unknown>) {
+    const useBadge = app.navPanels[0]!.experimental_useBadge!;
+    const Badge = () => <span data-testid="badge">{JSON.stringify(useBadge())}</span>;
+    listRows.mockReset().mockReturnValue(result);
+    const slot = renderSlot({ component: Badge }, { subPath: "" }, { rpc: { listRows } });
     mounted = slot;
     return slot;
   }
 
-  it("counts a review that is waiting", async () => {
-    const slot = renderCount(listing({ rows: [rowFixture({ requestedAt: daysAgo(1) })] }));
-    await waitFor(() => expect(slot.container.textContent).toBe("1"));
-    expect(slot.queryByTitle(/waiting too long/)).toBeNull();
+  const badge = (slot: ReturnType<typeof renderBadge>) => JSON.parse(slot.getByTestId("badge").textContent!);
+
+  it("shows nothing for a review that has not waited too long", async () => {
+    const slot = renderBadge(listing({ rows: [rowFixture({ requestedAt: daysAgo(1) })] }));
+    await waitFor(() => expect(listRows).toHaveBeenCalled());
+    expect(badge(slot)).toBeNull();
   });
 
-  it("puts the reviews waiting too long in a red circle before the total", async () => {
-    const slot = renderCount(
+  it("counts the reviews waiting too long in red", async () => {
+    const slot = renderBadge(
       listing({
         rows: [
           rowFixture({ number: 1, requestedAt: daysAgo(4) }),
@@ -741,14 +744,11 @@ describe("sidebar count", () => {
         ],
       }),
     );
-    const badge = await slot.findByTitle("1 waiting too long");
-    expect(badge).toHaveTextContent("1");
-    expect(badge).toHaveClass("bg-red-600");
-    expect(slot.getByTitle("2 to review")).toHaveTextContent("2");
+    await waitFor(() => expect(badge(slot)).toEqual({ count: 1, tone: "critical", label: "1 waiting too long" }));
   });
 
   it("leaves snoozed requests out of the count", async () => {
-    const slot = renderCount(
+    const slot = renderBadge(
       listing({
         rows: [
           rowFixture({ number: 1, requestedAt: daysAgo(4), snoozedUntil: "2099-01-01" }),
@@ -756,8 +756,8 @@ describe("sidebar count", () => {
         ],
       }),
     );
-    await waitFor(() => expect(slot.container.textContent).toBe("1"));
-    expect(slot.queryByTitle(/waiting too long/)).toBeNull();
+    await waitFor(() => expect(listRows).toHaveBeenCalled());
+    expect(badge(slot)).toBeNull();
   });
 });
 

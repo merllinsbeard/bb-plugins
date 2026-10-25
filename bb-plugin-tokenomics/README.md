@@ -26,12 +26,15 @@ have bb compact the thread. The sidebar counts these threads in amber and red.
 
 ### Your session in the title bar
 
-![bb's title bar across the full window: the window controls, back and forward, the sidebar toggle, then Tokenomics' spark chart and rings in amber, with its limits open below: the current session 28% of about 300M tokens and on pace for 95% by 5:50 PM, the weekly limit, and the past day's tokens per hour running on to the reset with hatched bars](screenshots/page--title-bar-in-window.png)
+![bb's title bar across the full window: the window controls, back and forward, and the sidebar toggle, then Tokenomics' spark chart and rings in amber at the right edge of the sidebar, with its limits open below: the current session 28% of about 300M tokens and on pace for 95% by 5:50 PM, the weekly limit, and the past day's tokens per hour running on to the reset with hatched bars](screenshots/page--title-bar-in-window.png)
 
-bb's title bar shows your session as a spark chart of its tokens from its
-start to its reset, and two rings for the percent used, the session outside
-and the week inside. It turns amber or red once either is headed for its
-limit. Hover it for the limits and the past day's tokens per hour, or click it
+bb's title bar shows your session as a spark chart of its tokens per 15
+minutes from its start to its reset, with a dot for each 15 minutes still to
+come, and two rings for the percent used, the session outside and the week
+inside. It sits at the right edge of the sidebar column while the sidebar
+is open. When the sidebar is too narrow for the chart, only the rings show.
+While the sidebar is closed, it is hidden. It turns amber or red once either is
+headed for its limit. Hover it for the limits and the past day's tokens per hour, or click it
 to open the page.
 
 ### The Tokenomics page
@@ -79,7 +82,9 @@ outside service.
   starting when you install it.
 - Claude Code subagents report no usage to bb, so Tokenomics reads their
   transcripts from disk. It counts them only for threads that ran on the
-  machine bb runs on.
+  machine bb runs on. It reads them when the parent thread records usage,
+  and every 15 seconds while they are still writing, which is a directory
+  listing with no request to bb.
 - It reads the usage limits from bb every five minutes, one request that bb
   passes to each provider. Opening a thread's summary reads that thread's
   turn events from bb. The page, title bar, and meter read the plugin's own

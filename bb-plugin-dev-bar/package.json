@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Dev Bar",
-    "description": "A status bar along the bottom of a thread that shows which of the checkout's dev services are running, and starts, stops, or restarts them.",
+    "description": "A status bar under a thread that starts, stops, and restarts its checkout's dev services, and stops them when its last thread is archived.",
     "branding": {
       "icon": "Server"
     },

@@ -1,10 +1,11 @@
 // bb-plugin-diff-viewed — frontend entry.
 //
 // This plugin has no React slot. It registers a single content script that
-// decorates bb's own changes-panel diff cards with a Viewed checkbox, because
-// the card header is host-owned: `experimental_diffRenderer` replaces a diff's
-// body, and the header's `statSlot`/`actionSlot` are internal to bb. Decorating
-// existing app-shell DOM is what content scripts are for.
+// works around bb's own Viewed checkboxes in the changes panel: it counts the
+// viewed files in the toolbar, marks each file whose mark stays in bb, and
+// asks the server to sync with GitHub when a checkbox changes. The panel is
+// host-owned, so decorating existing app-shell DOM is what content scripts are
+// for.
 //
 // This file is only the wiring — real fetch, real scheduler, real document.
 // The behavior lives in viewed/engine.ts so it can be tested; see the comment
@@ -15,6 +16,9 @@ import { startEngine } from "./viewed/engine";
 import type { rpcContract } from "./server";
 
 type RpcMethod = keyof typeof rpcContract;
+
+/** How long after a checkbox changes to sync, so a run of clicks syncs once. */
+const SYNC_DELAY_MS = 400;
 
 /**
  * A content script gets no `useRpc` — that is a React hook and there is no
@@ -58,15 +62,19 @@ function mount(pluginId: string, signal: AbortSignal): () => void {
       const frame = window.requestAnimationFrame(run);
       return () => window.cancelAnimationFrame(frame);
     },
+    delay: (run) => {
+      const timer = window.setTimeout(run, SYNC_DELAY_MS);
+      return () => window.clearTimeout(timer);
+    },
     warn: (cause) => {
       console.warn("[diff-viewed]", cause);
     },
   });
 
-  // Another window, or GitHub, may have marked a file since this one last
-  // looked. Realtime is a React-side API, so this settles for refetching when
-  // the window comes back to the front. The server reuses GitHub's answer for
-  // half a minute, so focusing back and forth does not query it each time.
+  // GitHub may have marked a file since this window last looked. This syncs
+  // again when the window comes back to the front. The server reuses GitHub's
+  // answer for half a minute, so focusing back and forth does not query it
+  // each time.
   const onFocus = () => {
     engine.refresh();
   };
@@ -81,7 +89,7 @@ function mount(pluginId: string, signal: AbortSignal): () => void {
 
 export default definePluginApp((app) => {
   app.contentScripts.register({
-    id: "diff-viewed-checkbox",
+    id: "diff-viewed-sync",
     mount({ pluginId, signal }) {
       return mount(pluginId, signal);
     },

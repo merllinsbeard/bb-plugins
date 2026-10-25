@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseManifest, parseStatus, pickManifest, serviceCommands, type Manifest } from "./manifest";
+import { parseManifest, parseStatus, pickManifest, serviceCommands, servicesToStop, type Manifest, type Service } from "./manifest";
 
 const manifest: Manifest = {
   status: "pnpm status --json",
@@ -106,5 +106,26 @@ describe("pickManifest", () => {
     expect(pickManifest({ committed: null, local: "b", project: "c" })).toEqual({ source: "local", text: "b" });
     expect(pickManifest({ committed: null, local: null, project: "c" })).toEqual({ source: "project", text: "c" });
     expect(pickManifest({ committed: null, local: null, project: null })).toBeNull();
+  });
+});
+
+describe("servicesToStop", () => {
+  const service = (id: string, state: Service["state"], verbs: Service["verbs"] = ["start", "stop", "restart"]): Service => ({
+    id,
+    label: id,
+    state,
+    url: null,
+    message: null,
+    verbs,
+  });
+
+  it("stops the services that are running or starting", () => {
+    expect(
+      servicesToStop([service("web", "running"), service("worker", "starting"), service("db", "stopped"), service("desktop", "failed")]),
+    ).toEqual(["web", "worker"]);
+  });
+
+  it("skips a service that cannot be stopped", () => {
+    expect(servicesToStop([service("db", "running", ["start"])])).toEqual([]);
   });
 });

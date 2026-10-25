@@ -114,8 +114,47 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const dir = await subagentsDir(sessionId);
     if (dir === null) return 0;
-    return store.recordSubagents(threadId, await readTranscripts(dir, store.subagentOffsets(threadId)));
+    const reads = await readTranscripts(dir, store.subagentOffsets(threadId));
+    const wroteAt = Math.max(0, ...reads.flatMap((read) => read.calls.map((call) => call.createdAt)));
+    if (wroteAt > (liveSubagents.get(threadId) ?? 0)) liveSubagents.set(threadId, wroteAt);
+    return store.recordSubagents(threadId, reads);
   }
+
+  // Background subagents keep writing after their parent's turn ends, and
+  // the parent records no usage while it waits on them, so nothing above
+  // reads them again. Threads whose subagents wrote recently are read again
+  // on a timer: a directory listing and one stat per transcript, no request
+  // to bb. A thread drops off once its subagents stop writing.
+  const SUBAGENTS_EVERY_MS = 15_000;
+  const SUBAGENTS_QUIET_MS = 10 * 60_000;
+  const liveSubagents = new Map<string, number>();
+  bb.background.service("subagents", {
+    async start(signal) {
+      while (!signal.aborted) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, SUBAGENTS_EVERY_MS);
+          signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        const changed: string[] = [];
+        for (const [threadId, wroteAt] of liveSubagents) {
+          if (signal.aborted) break;
+          if (Date.now() - wroteAt > SUBAGENTS_QUIET_MS) {
+            liveSubagents.delete(threadId);
+            continue;
+          }
+          try {
+            if ((await scanSubagents(threadId)) > 0) changed.push(threadId);
+          } catch (error) {
+            warn(threadId, error);
+          }
+        }
+        if (changed.length > 0) bb.realtime.publish(USAGE_CHANNEL, { threadIds: changed });
+      }
+    },
+  });
 
   /**
    * The thread's latest context size. A thread read before the plugin

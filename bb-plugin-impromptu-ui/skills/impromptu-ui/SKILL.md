@@ -138,6 +138,7 @@ When your turn ends on a question the user answers by picking, such as "Should I
 
 - The question, its buttons, and a "Something else…" field show right above the composer, and the side panel never opens. Once the user answers, a green banner with the answer replaces the buttons.
 - An answer typed into the field comes to you as the question, a blank line, and what they typed. `state` prints it as `(Something else: "<text>")`.
+- Any reply typed there closes the question, even one that only asks for more, such as "What would the first option change?". Answer it, then, if the decision is still open, publish the question again under the same key with a new item `id` (such as `deploy-2`), updating the answers if what you found changes them. Never tell the user a question is still above the composer without checking `state`.
 - 1 to 3 questions per view, each with 2 to 4 buttons: `message`, `thread`, or `link`, at least 2 of them answers rather than links. A `command` needs the "cards" layout, since it asks before it runs. So do drafts, notes, changes, evidence, variations, related notes, history, a status, a meter, a closing step, and `thread` on an item.
 - Keep labels short and say what each does in `detail`, which shows when the pointer rests on the button. Mark the answer you recommend `primary`.
 - End your reply with the proposal and say the question is above the composer. Do not repeat the question or the answers in chat.

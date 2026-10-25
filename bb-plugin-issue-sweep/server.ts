@@ -8,7 +8,7 @@ import {
   unclaimedPromptThreadIds,
 } from "bb-plugin-gh-context/links";
 import { rpcContract } from "./issues/contract.js";
-import { parseStatusOrder, shouldAutoApply } from "./issues/board.js";
+import { boardForRow, parseBoardNames, parseStatusOrder, shouldAutoApply } from "./issues/board.js";
 import { seenThroughOwn } from "./issues/comments.js";
 import {
   GhUnavailableError,
@@ -21,7 +21,7 @@ import {
 } from "./issues/gh.js";
 import {
   BoardUnavailableError,
-  fetchBoardProject,
+  fetchBoardProjects,
   ownerOf,
   // Aliased: the RPC handler below has the same name, and a bare call inside
   // it would read as recursion.
@@ -63,12 +63,12 @@ export default async function plugin(bb: BbPluginApi) {
     },
     projectBoard: {
       type: "string",
-      label: "Project board",
-      // The board's name, not its id, and a setting rather than a constant:
-      // it identifies a private org project and this repository is public.
-      // An issue commonly sits on several boards at once — a team one and
-      // someone's personal project — so the status is read from this one and
-      // the rest ignored. Blank takes the first status found anywhere.
+      label: "Project boards",
+      description:
+        "Board names, separated by commas, such as \"Team Board, Personal\". Each issue shows its status from the first board listed that it is on. An issue on none of them is added to the first board listed that its repository's owner has. Blank reads the status from any board.",
+      // Names, not ids, and a setting rather than a constant: they identify
+      // private projects and this repository is public. The key keeps its
+      // old singular name so a saved board carries over.
       default: "",
     },
     boardStages: {
@@ -130,9 +130,9 @@ export default async function plugin(bb: BbPluginApi) {
     },
     countedStatuses: {
       type: "string",
-      label: "Statuses counted in the sidebar",
-      // The badge answers "how much is on me right now", which is a smaller
-      // question than "how much is assigned to me". Blank counts everything.
+      label: "Statuses that are on you",
+      // "What is on me right now" is a smaller question than "what is
+      // assigned to me". Blank counts everything.
       default: "In Progress,Ready",
     },
     statusOnStart: {
@@ -197,21 +197,44 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * One board per owner, resolved on first use and kept for the process.
+   * The listed boards each owner has, resolved on first use and kept for the
+   * process.
    *
    * A board's id and its Status options change far less often than its
-   * contents, and resolving them costs two `gh project` calls. Keyed by owner
-   * because the board belongs to the org that owns the repository, and the
-   * board name is the same setting for all of them.
+   * contents, and resolving them costs one `gh project` call per owner plus
+   * one per board. Keyed by owner because a board belongs to the org or user
+   * that owns it, and by the setting too, so changing the list reads the new
+   * boards rather than the ones cached under the old list.
    */
-  const boards = new Map<string, BoardProject>();
+  const boards = new Map<string, BoardProject[]>();
 
-  async function boardFor(owner: string): Promise<BoardProject> {
-    const cached = boards.get(owner);
-    if (cached) return cached;
+  function boardsKey(owner: string, projectBoard: string): string {
+    return `${owner}\n${projectBoard}`;
+  }
+
+  async function boardsFor(owner: string): Promise<BoardProject[]> {
     const { ghPath, projectBoard } = await settings.get();
-    const project = await fetchBoardProject(createGhRunner(ghPath), owner, projectBoard);
-    boards.set(owner, project);
+    const key = boardsKey(owner, projectBoard);
+    const cached = boards.get(key);
+    if (cached) return cached;
+    const projects = await fetchBoardProjects(
+      createGhRunner(ghPath),
+      owner,
+      parseBoardNames(projectBoard),
+    );
+    boards.set(key, projects);
+    return projects;
+  }
+
+  /** The board a row's moves go to; see boardForRow for which one. */
+  async function boardOf(row: { repo: string; onBoard: boolean; board?: string | null }): Promise<BoardProject> {
+    const owner = ownerOf(row.repo);
+    const project = boardForRow(row, await boardsFor(owner));
+    if (!project) {
+      throw new BoardUnavailableError(
+        `${row.repo} is on ${row.board ?? "a board"}, which ${owner} does not own, so it cannot be moved from here.`,
+      );
+    }
     return project;
   }
 
@@ -282,7 +305,13 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  async function sweepNow(): Promise<{ ok: boolean; error: string | null }> {
+  /**
+   * `signal` is the background service's: once it aborts, the gh call in
+   * flight is killed and the rest of the sweep is skipped, so a reload never
+   * waits on a sweep. bb degrades a plugin whose service misses its stop
+   * window, and a degraded plugin answers no RPC until it is reloaded again.
+   */
+  async function sweepNow(signal?: AbortSignal): Promise<{ ok: boolean; error: string | null }> {
     const { ghPath, projectBoard } = await settings.get();
     try {
       const scope = await repoFilter();
@@ -290,16 +319,22 @@ export default async function plugin(bb: BbPluginApi) {
       // here can call GitHub. Only runSweep and absorbOwnComments go through
       // the counting runner, so the call count leaves out the board's calls,
       // but the points include them.
-      const result = await syncUsage.measure(createGhRunner(ghPath), async (gh) => {
+      const result = await syncUsage.measure(createGhRunner(ghPath, signal), async (gh) => {
         const swept = await runSweep(gh, () => Date.now(), projectBoard, scope);
+        // A stopped sweep's repositories all read as failed. Keep the last
+        // listing rather than storing that.
+        signal?.throwIfAborted();
         store.replaceAll(swept);
         // Every row's count on first sight, so a row is never "N new" just
         // because this is the first sweep to list it.
         store.recordFirstSeen(swept.rows, swept.sweptAt);
         await absorbOwnComments(gh, swept.rows);
+        // The board steps make their own gh calls, outside the signal.
+        signal?.throwIfAborted();
         // Before the publish, so the panel's reload finds the options already
         // there and renders pickers on its first paint rather than its second.
         await warmBoards(swept.rows);
+        signal?.throwIfAborted();
         // Also before the publish. The rows it works from are the ones just
         // stored, so a promotion patches the stored row too and the moved cards
         // show their new status on this sweep rather than the next one.
@@ -334,6 +369,7 @@ export default async function plugin(bb: BbPluginApi) {
       unavailableRuns = 0;
       return { ok: true, error: null };
     } catch (error) {
+      if (signal?.aborted) return { ok: false, error: "Sweep stopped." };
       const message = error instanceof Error ? error.message : String(error);
       // The last good rows stay in the store, so a broken sweep degrades to a
       // stale panel with a banner rather than an empty one.
@@ -398,10 +434,11 @@ export default async function plugin(bb: BbPluginApi) {
    * the first paint after a reload block for five seconds.
    */
   async function warmBoards(rows: readonly { repo: string }[]): Promise<void> {
+    const { projectBoard } = await settings.get();
     for (const owner of new Set(rows.map((row) => ownerOf(row.repo)))) {
-      if (owner === "" || boards.has(owner)) continue;
+      if (owner === "" || boards.has(boardsKey(owner, projectBoard))) continue;
       try {
-        await boardFor(owner);
+        await boardsFor(owner);
       } catch (error) {
         // A missing or misnamed board is a configuration matter, not a sweep
         // failure: the listing is still correct, it just has no picker.
@@ -412,18 +449,18 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * The board's Status options, for whichever owner the listing covers.
+   * The Status options of the board a row's moves go to.
    *
-   * Every repository in the listing is normally one org's, so the first owner
-   * already resolved wins. Reads the cache only — an unwarmed cache yields no
-   * options, which degrades to statuses as text with no picker.
+   * Reads the cache only — an unwarmed cache yields no options, which
+   * degrades to statuses as text with no picker.
    */
-  function statusOptionsFor(rows: readonly { repo: string }[]): string[] {
-    for (const owner of new Set(rows.map((row) => ownerOf(row.repo)))) {
-      const project = boards.get(owner);
-      if (project) return project.statusOptions.map((option) => option.name);
-    }
-    return [];
+  function statusOptionsFor(
+    row: { repo: string; onBoard: boolean; board?: string | null },
+    projectBoard: string,
+  ): string[] {
+    const cached = boards.get(boardsKey(ownerOf(row.repo), projectBoard));
+    const project = cached ? boardForRow(row, cached) : null;
+    return project ? project.statusOptions.map((option) => option.name) : [];
   }
 
   /**
@@ -440,7 +477,14 @@ export default async function plugin(bb: BbPluginApi) {
    * must not turn into an error banner over a listing that is perfectly good.
    */
   async function autoSetStatus(
-    row: { repo: string; number: number; url: string; boardStatus: string | null },
+    row: {
+      repo: string;
+      number: number;
+      url: string;
+      boardStatus: string | null;
+      onBoard: boolean;
+      board?: string | null;
+    },
     target: string,
   ): Promise<boolean> {
     const wanted = target.trim();
@@ -449,7 +493,7 @@ export default async function plugin(bb: BbPluginApi) {
 
     try {
       const { ghPath } = await settings.get();
-      const project = await boardFor(ownerOf(row.repo));
+      const project = await boardOf(row);
       const option = project.statusOptions.find(
         (candidate) => candidate.name.toLowerCase() === wanted.toLowerCase(),
       );
@@ -682,12 +726,7 @@ export default async function plugin(bb: BbPluginApi) {
         boardStages: parseStatusOrder(boardStages),
         staleAfterDays: parseStaleAfterDays(staleAfterDays),
         reviewStatus: statusOnPullRequest.trim(),
-        // Offered options come from the board, not from boardStages: that
-        // setting is a display preference and can name a column that does not
-        // exist, and the picker must only offer what `item-edit` will accept.
-        statusOptions: statusOptionsFor(rows),
         countedStatuses: parseStatusOrder(countedStatuses),
-        boardName: projectBoard,
         rows: rows.map((row) => {
           const key = `${row.repo}#${row.number}`;
           // No record yet reads as nothing new: the sweep records the count on
@@ -696,6 +735,12 @@ export default async function plugin(bb: BbPluginApi) {
           const seenCount = seen.get(key);
           return {
             ...row,
+            board: row.board ?? null,
+            // Offered options come from the row's board, not from boardStages:
+            // that setting is a display preference and can name a column the
+            // board does not have, and the picker must only offer what
+            // `item-edit` will accept.
+            statusOptions: statusOptionsFor(row, projectBoard),
             parent: row.parent ?? null,
             note: notes.get(key) ?? null,
             onHold: holds.has(key),
@@ -866,7 +911,7 @@ export default async function plugin(bb: BbPluginApi) {
         return { ...(await fetchComments(createGhRunner(ghPath), repo, number)), error: null };
       } catch (error) {
         bb.log.warn(`could not read the comments on ${repo}#${number}: ${String(error)}`);
-        return { comments: [], total: 0, error: "Could not read the comments from GitHub." };
+        return { entries: [], total: 0, error: "Could not read the comments from GitHub." };
       }
     },
 
@@ -883,7 +928,7 @@ export default async function plugin(bb: BbPluginApi) {
 
       try {
         const { ghPath } = await settings.get();
-        const project = await boardFor(ownerOf(repo));
+        const project = await boardOf(row);
         const option = project.statusOptions.find(
           (candidate) => candidate.name.toLowerCase() === status.trim().toLowerCase(),
         );
@@ -940,7 +985,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.background.service("sweep", {
     async start(signal) {
       while (!signal.aborted) {
-        await sweepNow();
+        await sweepNow(signal);
         if (signal.aborted) return;
 
         const { syncIntervalMinutes } = await settings.get();

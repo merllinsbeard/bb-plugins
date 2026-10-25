@@ -6,12 +6,9 @@ import {
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
-import { SidebarCount } from "@danielbachhuber/bb-plugin-component-library/sidebar-count";
-import { TopBarCount, TopBarSlot } from "@danielbachhuber/bb-plugin-component-library/top-bar";
 import { SyncStatus } from "@danielbachhuber/bb-plugin-component-library/sync-status";
 import { useThreadStatus } from "@danielbachhuber/bb-plugin-component-library/thread-status";
 import { useLastValue } from "@danielbachhuber/bb-plugin-component-library/last-value";
-import { Icon } from "@/components/ui/icon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   useStartThreadBox,
@@ -19,7 +16,6 @@ import {
 } from "@danielbachhuber/bb-plugin-component-library/start-thread";
 import type { HarvestTimerClient } from "bb-plugin-harvest/picker";
 import type { rpcContract } from "./server.js";
-import { countedRows } from "./issues/board.js";
 import {
   IssueListView,
   type HarvestPanelState,
@@ -318,41 +314,13 @@ function Panel() {
   );
 }
 
-function useCounts() {
-  const { listing } = useListing();
-  // Not every assigned issue: the badge is a "how much is on me right now"
-  // number, and a Backlog item three months out is not on you today.
-  const count = listing
-    ? countedRows(listing.rows, listing.countedStatuses).length
-    : 0;
-  // Nothing here is urgent enough for the red circle, but drawing the total
-  // through SidebarCount keeps it lined up with the counts on other rows.
-  return { urgent: 0, total: count, urgentLabel: "", totalLabel: `${count} assigned` };
-}
-
-function AssignedCount() {
-  return <SidebarCount {...useCounts()} />;
-}
-
-/** The same count in bb's top bar on every page, as a button that opens Issues. */
-function IssuesTopBar() {
-  const navigate = useBbNavigate();
-  return (
-    <TopBarSlot pluginId="issue-sweep" order={1} activeOn={["/plugins/issue-sweep/issues"]}>
-      <TopBarCount icon={<Icon name="ListTodo" />} label="Open Issues" onClick={() => navigate.toPluginPanel("issues")} {...useCounts()} />
-    </TopBarSlot>
-  );
-}
-
 export default definePluginApp((app) => {
-  app.slots.experimental_appOverlay({ id: "issues-top-bar", component: IssuesTopBar });
   app.slots.navPanel({
     id: "issues",
     title: "Issues",
     icon: "ListTodo",
     path: "issues",
     component: Panel,
-    experimental_sidebarAccessory: AssignedCount,
     headerContent: SyncHeader,
   });
 });

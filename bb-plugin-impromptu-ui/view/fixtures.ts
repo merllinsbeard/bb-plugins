@@ -563,6 +563,35 @@ export const staplesView: View = viewSchema.parse({
 });
 
 /**
+ * A "list" view whose rows have no draft and a description much longer than
+ * the name, with two buttons beside each. Invented vendors.
+ */
+export const vendorsView: View = viewSchema.parse({
+  title: "Sort the vendors",
+  summary: "Vendors on recent invoices that are not on either list yet.",
+  layout: "list",
+  dismissLabel: "Skip",
+  sections: [
+    {
+      title: "To sort",
+      items: [
+        ["acme-anvils", "Acme Anvils", "Drop-forged anvils and other heavy goods, shipped by freight. Ordered from twice last quarter by octocat."],
+        ["gadget-works", "Gadget Works", "Small electronics and spare parts for the widget line, with a minimum order of 50 units. hubber is the contact."],
+        ["widget-wholesale", "Widget Wholesale Supply Co.", "Bulk widgets at a discount for orders over 1,000, invoiced monthly."],
+      ].map(([id, title, summary]) => ({
+        id,
+        title,
+        summary,
+        actions: [
+          { type: "message", label: "Keep", text: `Keep ${title}` },
+          { type: "message", label: "Drop", text: `Drop ${title}` },
+        ],
+      })),
+    },
+  ],
+});
+
+/**
  * A grocery-cart-shaped view: each card offers products as buttons and a
  * one-line field for a value of the user's own. Invented store and products.
  */

@@ -88,8 +88,52 @@ Services appear in the order listed. Unknown fields are ignored.
   command after 20 seconds.
 - Exit non-zero on failure, with the reason in the last few lines of output.
   The bar shows the last 6 lines.
+- Stop a service without asking, for `stop`. When the last thread in a
+  checkout is archived, the bar stops every service that is `running` or
+  `starting` and can be stopped, with no one watching.
 - Be safe to run every 5 seconds, for `status`. It runs that often while the
   thread is on screen, and every second for 15 seconds after a button.
+
+## Give each checkout its own ports
+
+bb runs threads in separate worktrees of one repository, and each thread's
+bar starts that worktree's services. When the repository's dev server,
+Storybook, docs site, or API listens on a fixed port, the second worktree's
+start fails because the port is taken. Or a tool that picks the next free
+port starts on one the status command doesn't know about, and the bar opens
+the first worktree's server instead.
+
+So before writing the manifest, find every port the repository's services
+listen on: its `package.json` scripts, `vite.config.*`, `.storybook/`,
+`docker-compose.yml`, `Procfile`, `.env` files. When any is fixed, suggest
+to the user that each checkout run on its own ports, and say which files
+that changes. Make the change once they agree. Then:
+
+- Choose the ports the first time the checkout starts, and save them in a
+  file kept out of git, such as `.bb/ports.json`, so they stay the same
+  across restarts and the status command can read them. Deriving a starting
+  point from the checkout's path keeps two checkouts apart, and checking that
+  each port is free before saving it covers the rare overlap:
+
+  ```sh
+  base=$(( 20000 + $(printf '%s' "$PWD" | cksum | cut -d' ' -f1) % 1000 * 10 ))
+  # web on $base, Storybook on $((base + 1)), API on $((base + 2))
+  ```
+
+- Pass each port to its tool, and make the tool fail instead of moving to
+  another port: `vite --port N --strictPort`, `storybook dev -p N --exact-port`,
+  `ladle serve --port N`, `next dev -p N`, or `PORT=N` for a server that reads
+  it. A service that also calls another, such as a web app calling the API,
+  needs the other's port too.
+- Put the saved port in each service's `url` in the status JSON.
+- Tell whether a service is running from the process this checkout started,
+  such as a pid file in the checkout, not from whether something answers on
+  the port. Another checkout's server on a shared port would otherwise read
+  as running here.
+
+A service every checkout shares on purpose, such as a local database, keeps
+its fixed port. List it with `"actions": ["start"]` and a `message` saying
+it is shared, so archiving one thread doesn't stop it for the others.
 
 ## Checking a manifest
 

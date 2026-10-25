@@ -24,6 +24,8 @@ function rowFixture(overrides: Record<string, unknown> = {}) {
     commentsCount: 2,
     boardStatus: "Ready",
     onBoard: true,
+    board: "Acme Board",
+    statusOptions: OPTIONS,
     blockedBy: 0,
     closingPr: null,
     subtasks: null,
@@ -46,9 +48,7 @@ function listing(overrides: Record<string, unknown> = {}) {
     boardStages: OPTIONS,
     staleAfterDays: 7,
     reviewStatus: "In Review",
-    statusOptions: OPTIONS,
     countedStatuses: ["Ready", "In Progress"],
-    boardName: "Acme Board",
     sweptAt: 1_700_000_000_000,
     skippedRepos: [],
     truncated: false,
@@ -188,7 +188,7 @@ describe("panel", () => {
 
   it("still names held-back repositories alongside rows that did match", async () => {
     const slot = render(listing({ skippedRepos: ["acme/gadgets"] }));
-    expect(await slot.findByText(/Not swept: acme\/gadgets/)).toBeInTheDocument();
+    expect(await slot.findByRole("note", { name: /Not swept: acme\/gadgets/ })).toBeInTheDocument();
   });
 
   it("surfaces the last sweep error above the list", async () => {
@@ -412,7 +412,7 @@ describe("status picker", () => {
 
   it("offers every status the board has behind the last segment", async () => {
     const calls: unknown[] = [];
-    const slot = render(listing({ statusOptions: [...OPTIONS, "Stalled"] }), {
+    const slot = render(listing({ rows: [rowFixture({ statusOptions: [...OPTIONS, "Stalled"] })] }), {
       setBoardStatus: (input: unknown) => {
         calls.push(input);
         return { ok: true, added: false, error: null };
@@ -458,6 +458,19 @@ describe("status picker", () => {
     expect(calls[0]).toEqual({ repo: "acme/widgets", number: 42, status: "Ready" });
   });
 
+  it("draws only the stages the row's own board has", async () => {
+    // A second board with its own columns: In Progress is shared, the rest are not.
+    const slot = render(
+      listing({
+        rows: [nowRow({ board: "Octocat's Board", statusOptions: ["Todo", "In Progress", "Done"], boardStatus: "Todo" })],
+      }),
+    );
+    const stages = await slot.findByRole("group", { name: "Stages for #42" });
+    expect(within(stages).getByRole("button", { name: "In Progress" })).toBeInTheDocument();
+    expect(within(stages).queryByRole("button", { name: "Ready" })).toBeNull();
+    expect(within(stages).queryByRole("button", { name: "In Review" })).toBeNull();
+  });
+
   it("does not offer to add an issue already on the board with no status", async () => {
     // Adding it again would be a no-op, and the label would be a lie.
     const slot = render(listing({ rows: [rowFixture({ onBoard: true, boardStatus: null })] }));
@@ -467,7 +480,7 @@ describe("status picker", () => {
   });
 
   it("falls back to plain text when the board could not be read", async () => {
-    const slot = render(listing({ statusOptions: [], rows: [rowFixture({ onBoard: false, boardStatus: null })] }));
+    const slot = render(listing({ rows: [rowFixture({ statusOptions: [], onBoard: false, boardStatus: null })] }));
     await expandAll(slot);
     expect(await slot.findByText("Add to board")).toBeInTheDocument();
     expect(slot.queryByLabelText("Board status for #42")).toBeNull();
@@ -606,9 +619,9 @@ describe("seen comments", () => {
       listComments: (input: unknown) => {
         commentCalls.push(input);
         return {
-          comments: [
-            { author: "octocat", avatarUrl: "", body: "Seen this one before.", url: "u1", at: Date.now() - 5 * HOUR },
-            { author: "hubber", avatarUrl: "", body: "It drifts on every second resize.", url: "u2", at: Date.now() - HOUR },
+          entries: [
+            { kind: "comment", author: "octocat", avatarUrl: "", body: "Seen this one before.", url: "u1", at: Date.now() - 5 * HOUR },
+            { kind: "comment", author: "hubber", avatarUrl: "", body: "It drifts on every second resize.", url: "u2", at: Date.now() - HOUR },
           ],
           total: 2,
           error: null,
@@ -624,9 +637,9 @@ describe("seen comments", () => {
 
     fireEvent.click(within(row).getByRole("button", { name: "Show 2 comments" }));
     const newest = await within(row).findByText("It drifts on every second resize.");
-    expect(within(newest.closest("a")!).getByText("new")).toBeInTheDocument();
+    expect(within(newest.closest("li")!).getByText("new")).toBeInTheDocument();
     const older = within(row).getByText("Seen this one before.");
-    expect(within(older.closest("a")!).queryByText("new")).toBeNull();
+    expect(within(older.closest("li")!).queryByText("new")).toBeNull();
     expect(commentCalls).toEqual([{ repo: "acme/widgets", number: 42 }]);
     await waitFor(() => expect(seenCalls).toEqual([{ repo: "acme/widgets", number: 42 }]));
 
@@ -637,7 +650,7 @@ describe("seen comments", () => {
   it("says so in the drawer when GitHub could not be read, and leaves the issue unseen", async () => {
     const seenCalls: unknown[] = [];
     const slot = render(listing({ rows: [nowRow({ newComments: 1 })] }), {
-      listComments: () => ({ comments: [], total: 0, error: "Could not read the comments from GitHub." }),
+      listComments: () => ({ entries: [], total: 0, error: "Could not read the comments from GitHub." }),
       markSeen: (input: unknown) => {
         seenCalls.push(input);
         return { ok: true };
@@ -659,59 +672,6 @@ describe("seen comments", () => {
     });
     fireEvent.click(await slot.findByRole("button", { name: "Open thread" }));
     await waitFor(() => expect(calls).toEqual([{ repo: "acme/widgets", number: 42 }]));
-  });
-});
-
-describe("sidebar badge", () => {
-  function renderBadge(result: Record<string, unknown>) {
-    const slot = renderSlot(
-      { component: app.navPanels[0]!.experimental_sidebarAccessory! },
-      {},
-      { rpc: { listRows: () => result } },
-    );
-    mounted = slot;
-    return slot;
-  }
-
-  const board = (boardStatus: string | null, extra: Record<string, unknown> = {}) =>
-    rowFixture({ boardStatus, ...extra });
-
-  it("counts only the statuses it was told to", async () => {
-    const slot = renderBadge(
-      listing({
-        countedStatuses: ["In Progress", "Ready"],
-        rows: [
-          board("In Progress", { number: 1 }),
-          board("Ready", { number: 2 }),
-          board("Backlog", { number: 3 }),
-          board("In Review", { number: 4 }),
-          board(null, { number: 5 }),
-        ],
-      }),
-    );
-    expect(await slot.findByText("2")).toBeInTheDocument();
-  });
-
-  it("leaves out a blocked issue that would otherwise count", async () => {
-    // Nobody can start it, and its row is filed in Later, so it is not on
-    // you right now.
-    const slot = renderBadge(
-      listing({
-        countedStatuses: ["In Progress"],
-        rows: [
-          board("In Progress", { number: 1 }),
-          board("In Progress", { number: 2, blockedBy: 1 }),
-        ],
-      }),
-    );
-    expect(await slot.findByText("1")).toBeInTheDocument();
-  });
-
-  it("shows nothing rather than a zero", async () => {
-    const slot = renderBadge(
-      listing({ countedStatuses: ["In Progress"], rows: [board("Backlog")] }),
-    );
-    await waitFor(() => expect(slot.container.textContent).toBe(""));
   });
 });
 

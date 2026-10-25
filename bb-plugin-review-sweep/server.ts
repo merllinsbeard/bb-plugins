@@ -221,8 +221,15 @@ export default async function plugin(bb: BbPluginApi) {
   let unavailableRuns = 0;
   const UNAVAILABLE_RUNS_BEFORE_CONFIG = 3;
 
-  async function sweepNow(): Promise<{ ok: boolean; error: string | null }> {
-    const outcome = await fetchAndStore();
+  /**
+   * `signal` is the background service's: once it aborts, the gh call in
+   * flight is killed and the rest of the sweep is skipped, so a reload never
+   * waits on a sweep. bb degrades a plugin whose service misses its stop
+   * window, and a degraded plugin answers no RPC until it is reloaded again.
+   */
+  async function sweepNow(signal?: AbortSignal): Promise<{ ok: boolean; error: string | null }> {
+    const outcome = await fetchAndStore(signal);
+    if (signal?.aborted) return outcome;
 
     // Reconciliation runs whether or not gh succeeded: a missing gh says
     // nothing about whether a linked thread still exists, and a row stuck on
@@ -269,13 +276,16 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  async function fetchAndStore(): Promise<{ ok: boolean; error: string | null }> {
+  async function fetchAndStore(signal?: AbortSignal): Promise<{ ok: boolean; error: string | null }> {
     const { ghPath } = await settings.get();
     try {
       const scope = await repoFilter();
-      const result = await syncUsage.measure(createGhRunner(ghPath), (gh) =>
+      const result = await syncUsage.measure(createGhRunner(ghPath, signal), (gh) =>
         runSweep(gh, () => Date.now(), scope),
       );
+      // A stopped sweep's repositories all read as failed. Keep the last
+      // listing rather than storing that.
+      if (signal?.aborted) return { ok: false, error: "Sweep stopped." };
       store.replaceAll(result);
       // Every row's count on first sight, so a row is never "N new" just
       // because this is the first sweep to list it.
@@ -294,6 +304,7 @@ export default async function plugin(bb: BbPluginApi) {
       unavailableRuns = 0;
       return { ok: true, error: null };
     } catch (error) {
+      if (signal?.aborted) return { ok: false, error: "Sweep stopped." };
       const message = error instanceof Error ? error.message : String(error);
       store.recordFailure(message);
       bb.realtime.publish(REALTIME_CHANNEL, { sweptAt: null });
@@ -714,7 +725,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.background.service("sweep", {
     async start(signal) {
       while (!signal.aborted) {
-        await sweepNow();
+        await sweepNow(signal);
         if (signal.aborted) return;
 
         const { syncIntervalMinutes } = await settings.get();

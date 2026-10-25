@@ -331,10 +331,11 @@ the others among its alternatives.
 
 After an edit, to another skill or the guide, publish the
 `refine-impromptu-ui` view again with the diff in the picked card's
-`changes`, and end the turn there. If the repository's rules let you commit
-when asked, give that card a `message` button, `Commit and push`, and mark it
-`"complete": true` once the commit lands; otherwise mark it complete now. Do
-not ask about committing in chat.
+`changes`, and mark it `"complete": true`. If the repository's rules let you
+commit when asked, ask whether to commit and push as an inline question under
+its own key, `refine-impromptu-ui-commit`, not as a button on the card: the
+card's buttons stay disabled once **Do this one** went through. End the turn
+there. Do not ask about committing in chat.
 
 ### Testing a change to the thread instructions
 

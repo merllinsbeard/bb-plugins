@@ -1,6 +1,6 @@
 // bb-plugin-tokenomics — the Tokenomics page, the thread header's token count,
 // and the context meter above a thread's composer.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   definePluginApp,
   useBbNavigate,
@@ -15,9 +15,9 @@ import { SidebarLevels } from "@danielbachhuber/bb-plugin-component-library/side
 
 import { ContextMeter } from "@/components/context-meter";
 import { ThreadTokenCount, type ThreadTokens } from "@/components/thread-token-count";
-import { TopBarLimits, urgentSession } from "@/components/limit-spark";
+import { TOP_BAR_LIMITS_WIDTH, TopBarLimits, urgentSession } from "@/components/limit-spark";
 import { UsageView, type UsageData } from "@/components/usage-view";
-import { TopBarSlot } from "@danielbachhuber/bb-plugin-component-library/top-bar";
+import { TopBarSlot, useTopBarRoom } from "@danielbachhuber/bb-plugin-component-library/top-bar";
 
 import type { rpcContract } from "./server";
 import { contextLevel, type ContextThresholds } from "./usage/context.js";
@@ -171,8 +171,8 @@ function LimitsTopBar() {
     (limit) => limit.providerId === session.providerId && limit.accountKey === session.accountKey,
   );
   return (
-    <TopBarSlot pluginId="tokenomics" order={4} activeOn={["/plugins/tokenomics/tokenomics"]}>
-      <TopBarLimits
+    <TopBarSlot pluginId="tokenomics" order={4} alignEnd activeOn={["/plugins/tokenomics/tokenomics"]}>
+      <FittedLimits
         session={session}
         limits={account}
         now={now}
@@ -183,6 +183,18 @@ function LimitsTopBar() {
       />
     </TopBarSlot>
   );
+}
+
+/**
+ * The title bar button with its spark chart while the open sidebar has room
+ * for it, the rings alone while it is narrower, and nothing while it is
+ * closed, so it never reaches past the sidebar's edge into the page title.
+ * Outside the desktop title bar there is no edge, so the chart always shows.
+ */
+function FittedLimits(props: ComponentProps<typeof TopBarLimits>) {
+  const room = useTopBarRoom();
+  if (room !== null && room < 0) return null;
+  return <TopBarLimits {...props} compact={room !== null && room < TOP_BAR_LIMITS_WIDTH} />;
 }
 
 function TokenomicsPage() {

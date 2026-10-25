@@ -16,11 +16,9 @@ import {
   useStartThreadBox,
   type StartThreadDraft,
 } from "@danielbachhuber/bb-plugin-component-library/start-thread";
-import { Icon } from "@/components/ui/icon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { sectionForRow } from "./sweep/actions.js";
-import { SidebarCount } from "@danielbachhuber/bb-plugin-component-library/sidebar-count";
-import { TopBarCount, TopBarSlot } from "@danielbachhuber/bb-plugin-component-library/top-bar";
+import { navBadgeRedContentScript, needsYouBadge } from "@danielbachhuber/bb-plugin-component-library/nav-badge";
 import {
   PrListView,
   type HarvestPanelState,
@@ -251,6 +249,11 @@ function Panel() {
             return;
           }
           box.open({ key, row, seed: result.seed, draftKey: `pr-sweep:${key}` });
+        } catch (error) {
+          // Most often the plugin itself is down, and a click that does
+          // nothing is the only other evidence of it.
+          const message = error instanceof Error ? error.message : String(error);
+          toast.error(`Could not start a thread: ${message}`);
         } finally {
           setStarting((current) => {
             const next = new Set(current);
@@ -312,31 +315,11 @@ function Panel() {
   );
 }
 
-/** The pull requests that need you, and every open pull request you authored. */
-function useCounts() {
+/** Pull requests' badge in bb's sidebar and rail: the rows that need you, in red. */
+function usePrsBadge() {
   const { listing } = useListing();
-  const sections = listing?.rows.map((row) => sectionForRow(row)) ?? [];
-  const needYou = sections.filter((section) => section === "needs-action").length;
-  const total = sections.length;
-  return { urgent: needYou, total, urgentLabel: `${needYou} need you`, totalLabel: `${total} open` };
-}
-
-/**
- * Beside Pull requests in the sidebar: the rows that need you in a red circle,
- * then every open pull request you authored.
- */
-function NeedsActionCount() {
-  return <SidebarCount {...useCounts()} />;
-}
-
-/** The same counts in bb's top bar on every page, as a button that opens Pull requests. */
-function PrsTopBar() {
-  const navigate = useBbNavigate();
-  return (
-    <TopBarSlot pluginId="pr-sweep" order={2} activeOn={["/plugins/pr-sweep/prs"]}>
-      <TopBarCount icon={<Icon name="GitPullRequest" />} label="Open Pull requests" onClick={() => navigate.toPluginPanel("prs")} {...useCounts()} />
-    </TopBarSlot>
-  );
+  const needYou = listing?.rows.filter((row) => sectionForRow(row) === "needs-action").length ?? 0;
+  return needsYouBadge({ urgent: needYou, urgentLabel: `${needYou} need you` });
 }
 
 export default definePluginApp((app) => {
@@ -356,7 +339,7 @@ export default definePluginApp((app) => {
     },
   });
 
-  app.slots.experimental_appOverlay({ id: "prs-top-bar", component: PrsTopBar });
+  app.contentScripts.register(navBadgeRedContentScript);
 
   app.slots.navPanel({
     id: "open-pr",
@@ -373,6 +356,6 @@ export default definePluginApp((app) => {
     path: "prs",
     component: Panel,
     headerContent: SyncHeader,
-    experimental_sidebarAccessory: NeedsActionCount,
+    experimental_useBadge: usePrsBadge,
   });
 });

@@ -1,9 +1,9 @@
 import { localDay } from "@danielbachhuber/bb-plugin-component-library/parse-day";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createFakePluginHost as createHost,
   makeThreadResponse,
@@ -897,5 +897,32 @@ describe("the thread's diff base", () => {
     const { harness } = await seededHost();
     await harness.behavior.callRpc("reviewBatchStart", { repo: "acme/widgets", number: 42, prompt: "Review it." });
     expect(environmentOf(harness)).toMatchObject({ workspace: { baseBranch: { kind: "default" } } });
+  });
+});
+
+describe("the sweep service", () => {
+  it("stops mid-sweep when the service is stopped, and keeps the last listing", async () => {
+    // A gh that hangs, as a slow sweep does when a reload lands in it. A
+    // service that waits on it misses bb's five-second stop window, and bb
+    // then stops answering every RPC until the plugin is reloaded.
+    const dir = mkdtempSync(join(tmpdir(), "review-sweep-hang-"));
+    const gh = join(dir, "gh");
+    const started = join(dir, "started");
+    writeFileSync(gh, `#!/bin/sh\ntouch '${started}'\nexec sleep 30\n`);
+    chmodSync(gh, 0o755);
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "review-sweep",
+      settings: { ghPath: gh, filterToProjects: "off" },
+    });
+    await plugin(bb);
+
+    const service = harness.behavior.runService("sweep");
+    await vi.waitFor(() => expect(existsSync(started)).toBe(true), { timeout: 5_000 });
+    const stopping = Date.now();
+    service.controller.abort();
+    await service.done;
+
+    expect(Date.now() - stopping).toBeLessThan(2_000);
+    expect(await harness.behavior.callRpc("listRows", null)).toMatchObject({ sweptAt: null, lastError: null });
   });
 });
