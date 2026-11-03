@@ -89,6 +89,10 @@ outside service.
   passes to each provider. Opening a thread's summary reads that thread's
   turn events from bb. The page, title bar, and meter read the plugin's own
   database.
+- Event reads start with 100 events per request. If bb returns HTTP 413,
+  Tokenomics halves the page size and retries from the same cursor. After a
+  full page succeeds, it doubles the size up to 100 again. A single event
+  over bb's response limit remains an error.
 
 ## Related plugins
 

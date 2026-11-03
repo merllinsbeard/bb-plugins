@@ -76,6 +76,27 @@ export function threadInfoOf(thread: ThreadLike): ThreadInfo {
   };
 }
 
+async function* eventPages<T extends { seq: number }>(
+  read: (afterSeq: number | null, limit: number) => Promise<T[]>,
+  afterSeq: number | null = null,
+): AsyncGenerator<T[]> {
+  let limit = PAGE_SIZE;
+  for (;;) {
+    let events: T[];
+    try {
+      events = await read(afterSeq, limit);
+    } catch (error) {
+      if (limit === 1 || typeof error !== "object" || error === null || !("status" in error) || error.status !== 413) throw error;
+      limit = Math.max(1, Math.floor(limit / 2));
+      continue;
+    }
+    yield events;
+    if (events.length < limit) return;
+    afterSeq = events.at(-1)!.seq;
+    limit = Math.min(PAGE_SIZE, limit * 2);
+  }
+}
+
 export interface SyncHooks {
   /** Called after rows are added for a thread, however the read started. */
   onAdded?: (threadId: string) => void;
@@ -95,8 +116,10 @@ export function createSync(store: Store, source: EventSource, hooks: SyncHooks =
     let cursor = store.cursor(thread.id);
     let added = 0;
     let contextAdded = 0;
-    for (;;) {
-      const events = await source.listUsage({ threadId: thread.id, afterSeq: cursor, limit: PAGE_SIZE });
+    for await (const events of eventPages(
+      (afterSeq, limit) => source.listUsage({ threadId: thread.id, afterSeq, limit }),
+      cursor,
+    )) {
       const rows = events.map(usageRowOf).filter((row): row is UsageRow => row !== null);
       const contextRows = events.map(contextRowOf).filter((row): row is ContextRow => row !== null);
       const lastSeq = events.reduce((seq, event) => Math.max(seq, event.seq), cursor ?? 0);
@@ -106,7 +129,6 @@ export function createSync(store: Store, source: EventSource, hooks: SyncHooks =
       if (!isEmpty(timings)) store.recordTimings(thread.id, timings);
       added += store.record(info, rows, lastSeq);
       cursor = lastSeq;
-      if (events.length < PAGE_SIZE) break;
     }
     if (added > 0) hooks.onAdded?.(thread.id);
     if (contextAdded > 0) hooks.onContext?.(thread.id);
@@ -154,17 +176,17 @@ export function createSync(store: Store, source: EventSource, hooks: SyncHooks =
 
   /** Every start or end of a turn in the thread, oldest first. */
   async function turnEvents(threadId: string, type: TurnEventType): Promise<TurnEvent[]> {
-    if (source.listTurnEvents === undefined) return [];
+    const listTurnEvents = source.listTurnEvents;
+    if (listTurnEvents === undefined) return [];
     const found: TurnEvent[] = [];
-    let cursor: number | null = null;
-    for (;;) {
-      const events = await source.listTurnEvents({ threadId, type, afterSeq: cursor, limit: PAGE_SIZE });
+    for await (const events of eventPages(
+      (afterSeq, limit) => listTurnEvents({ threadId, type, afterSeq, limit }),
+    )) {
       for (const event of events) {
         if (event.scope.turnId !== undefined) found.push({ turnId: event.scope.turnId, at: event.createdAt });
       }
-      if (events.length < PAGE_SIZE) return found;
-      cursor = events.at(-1)!.seq;
     }
+    return found;
   }
 
   /** What `attributeUsage` needs from bb for one thread. */
